@@ -199,7 +199,17 @@ async function publishToFacebook({ pageId, accessToken, caption, mediaFiles, lay
       const resp = await axios.post(`${META_API}/${pageId}/photos`, form, {
         headers: form.getHeaders(),
       });
-      return { postId: resp.data.id };
+
+      // Fetch the CDN URL so Instagram can reuse it (no second upload needed)
+      let imageUrls = [];
+      try {
+        const photoResp = await axios.get(`${META_API}/${resp.data.id}`, {
+          params: { fields: 'images', access_token: accessToken },
+        });
+        imageUrls = [photoResp.data.images[0].source];
+      } catch (_) {}
+
+      return { postId: resp.data.id, imageUrls };
     }
 
     // Album mode: create a photo album
@@ -249,6 +259,17 @@ async function publishToFacebook({ pageId, accessToken, caption, mediaFiles, lay
       return resp.data.id;
     }));
 
+    // Fetch CDN URLs from uploaded photos so Instagram can reuse them
+    let imageUrls = [];
+    try {
+      imageUrls = await Promise.all(photoIds.map(async (id) => {
+        const photoResp = await axios.get(`${META_API}/${id}`, {
+          params: { fields: 'images', access_token: accessToken },
+        });
+        return photoResp.data.images[0].source;
+      }));
+    } catch (_) {}
+
     const params = new URLSearchParams();
     params.append('message', caption);
     params.append('access_token', accessToken);
@@ -257,15 +278,16 @@ async function publishToFacebook({ pageId, accessToken, caption, mediaFiles, lay
     });
 
     const resp = await axios.post(`${META_API}/${pageId}/feed`, params);
-    return { postId: resp.data.id };
+    return { postId: resp.data.id, imageUrls };
   });
 }
 
-// Upload a local file to Facebook as unpublished photo and get its public URL
-async function getPublicImageUrl(accessToken, filePath) {
-  const form = buildUploadForm(filePath, accessToken, { published: 'false' });
+// Upload a local file to Facebook as unpublished photo and get its public URL.
+// Uses the IG user's linked page to avoid duplicating on the merchant's FB page.
+async function getPublicImageUrl(pageId, accessToken, filePath) {
+  const form = buildUploadForm(filePath, accessToken, { published: 'false', temporary: 'true' });
 
-  const resp = await axios.post(`${META_API}/me/photos`, form, {
+  const resp = await axios.post(`${META_API}/${pageId}/photos`, form, {
     headers: form.getHeaders(),
   });
 
@@ -276,7 +298,27 @@ async function getPublicImageUrl(accessToken, filePath) {
   return photoResp.data.images[0].source;
 }
 
-async function publishToInstagram({ igUserId, accessToken, caption, mediaFiles, videoFile }) {
+// Poll until an Instagram media container is ready to publish
+async function waitForIgContainer(containerId, accessToken) {
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      const resp = await axios.get(`${META_API}/${containerId}`, {
+        params: { fields: 'status_code', access_token: accessToken },
+      });
+      console.log(`[publisher] IG container ${containerId} status: ${resp.data.status_code}`);
+      if (resp.data.status_code === 'FINISHED') return;
+      if (resp.data.status_code === 'ERROR') {
+        throw new Error('Instagram media processing failed');
+      }
+    } catch (err) {
+      if (err.message === 'Instagram media processing failed') throw err;
+    }
+  }
+  throw new Error('Instagram media processing timed out');
+}
+
+async function publishToInstagram({ igUserId, accessToken, caption, mediaFiles, videoFile, fbPageId, fbImageUrls }) {
   if (!igUserId || !accessToken) throw new Error('Instagram credentials not configured');
 
   return withRetry(async () => {
@@ -344,14 +386,18 @@ async function publishToInstagram({ igUserId, accessToken, caption, mediaFiles, 
     }
 
     if (mediaFiles.length === 1) {
-      const filePath = path.join(__dirname, '..', '..', 'uploads', mediaFiles[0]);
-      const imageUrl = await getPublicImageUrl(accessToken, filePath);
+      // Reuse Facebook CDN URL if available, otherwise upload temporarily
+      const imageUrl = (fbImageUrls && fbImageUrls[0])
+        ? fbImageUrls[0]
+        : await getPublicImageUrl(fbPageId, accessToken, path.join(__dirname, '..', '..', 'uploads', mediaFiles[0]));
 
       const createResp = await axios.post(`${META_API}/${igUserId}/media`, {
         image_url: imageUrl,
         caption,
         access_token: accessToken,
       });
+
+      await waitForIgContainer(createResp.data.id, accessToken);
 
       const publishResp = await axios.post(`${META_API}/${igUserId}/media_publish`, {
         creation_id: createResp.data.id,
@@ -360,11 +406,16 @@ async function publishToInstagram({ igUserId, accessToken, caption, mediaFiles, 
       return { postId: publishResp.data.id };
     }
 
-    // Carousel - upload all images to FB in parallel to get public URLs
-    const imageUrls = await Promise.all(mediaFiles.slice(0, 10).map(async (file) => {
-      const filePath = path.join(__dirname, '..', '..', 'uploads', file);
-      return getPublicImageUrl(accessToken, filePath);
-    }));
+    // Carousel - reuse Facebook CDN URLs if available, otherwise upload temporarily
+    let imageUrls;
+    if (fbImageUrls && fbImageUrls.length >= mediaFiles.length) {
+      imageUrls = fbImageUrls;
+    } else {
+      imageUrls = await Promise.all(mediaFiles.slice(0, 10).map(async (file) => {
+        const filePath = path.join(__dirname, '..', '..', 'uploads', file);
+        return getPublicImageUrl(fbPageId, accessToken, filePath);
+      }));
+    }
 
     // Create carousel items sequentially — Meta API rejects concurrent container creation
     const childIds = [];
@@ -377,12 +428,19 @@ async function publishToInstagram({ igUserId, accessToken, caption, mediaFiles, 
       childIds.push(resp.data.id);
     }
 
+    // Wait for all carousel items to finish processing
+    for (const childId of childIds) {
+      await waitForIgContainer(childId, accessToken);
+    }
+
     const carouselResp = await axios.post(`${META_API}/${igUserId}/media`, {
       media_type: 'CAROUSEL',
       children: childIds.join(','),
       caption,
       access_token: accessToken,
     });
+
+    await waitForIgContainer(carouselResp.data.id, accessToken);
 
     const publishResp = await axios.post(`${META_API}/${igUserId}/media_publish`, {
       creation_id: carouselResp.data.id,

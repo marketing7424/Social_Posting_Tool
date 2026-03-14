@@ -147,7 +147,17 @@ async function publishInBackground(postId) {
   const imageFiles = media.filter(m => !m.mimetype?.startsWith('video/')).map(m => m.filename);
   const merchant = getMerchantFromDb(post.merchant_mid);
 
-  const publishPromises = platforms.map(async (pp) => {
+  // Publish platforms sequentially to avoid cross-posting duplication.
+  // Facebook first (so we can reuse its CDN URLs for Instagram).
+  const platformOrder = ['facebook', 'google', 'instagram'];
+  const ordered = platformOrder
+    .map(p => platforms.find(pp => pp.platform === p))
+    .filter(Boolean);
+
+  const settled = [];
+  let fbImageUrls = []; // Reuse Facebook CDN URLs for Instagram
+
+  for (const pp of ordered) {
     try {
       let result;
       if (pp.platform === 'facebook' && merchant) {
@@ -157,14 +167,17 @@ async function publishInBackground(postId) {
           layout: post.fb_layout, layoutVariant: post.fb_layout_variant,
           videoFile: videoFile?.filename || null,
         });
+        // Save image URLs so Instagram can reuse them (no duplicate upload)
+        if (result?.imageUrls) fbImageUrls = result.imageUrls;
       } else if (pp.platform === 'instagram' && merchant) {
         result = await publishToInstagram({
           igUserId: merchant.igUserId, accessToken: merchant.igToken,
           caption: pp.caption, mediaFiles: hasVideo ? [] : mediaFiles,
           videoFile: videoFile?.filename || null,
+          fbPageId: merchant.fbPageId,
+          fbImageUrls,
         });
       } else if (pp.platform === 'google' && merchant) {
-        // Google Business Profile does not support video — send images only
         result = await publishToGoogle({
           accessToken: merchant.googleToken, locationId: merchant.googleLocationId,
           caption: pp.caption, mediaFiles: imageFiles,
@@ -175,15 +188,13 @@ async function publishInBackground(postId) {
 
       db.prepare("UPDATE post_platforms SET status = 'success', platform_post_id = ? WHERE id = ?")
         .run(result?.postId || null, pp.id);
-      return { platform: pp.platform, status: 'success', postId: result?.postId };
+      settled.push({ platform: pp.platform, status: 'success', postId: result?.postId });
     } catch (err) {
       db.prepare("UPDATE post_platforms SET status = 'failed', error = ? WHERE id = ?")
         .run(err.message, pp.id);
-      return { platform: pp.platform, status: 'failed', error: err.message };
+      settled.push({ platform: pp.platform, status: 'failed', error: err.message });
     }
-  });
-
-  const settled = await Promise.all(publishPromises);
+  }
   const anySuccess = settled.some(r => r.status === 'success');
   const allSuccess = settled.every(r => r.status === 'success');
   const finalStatus = allSuccess ? 'success' : anySuccess ? 'partial' : 'failed';
@@ -300,6 +311,7 @@ router.post('/:id/retry', async (req, res) => {
           igUserId: merchant.igUserId, accessToken: merchant.igToken,
           caption: pp.caption, mediaFiles: retryHasVideo ? [] : mediaFiles,
           videoFile: retryVideoFile?.filename || null,
+          fbPageId: merchant.fbPageId,
         });
       } else if (pp.platform === 'google' && merchant) {
         result = await publishToGoogle({

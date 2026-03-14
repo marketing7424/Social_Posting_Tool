@@ -92,6 +92,7 @@ async function processScheduledPosts() {
             caption: pp.caption,
             mediaFiles: hasVideo ? [] : mediaFiles,
             videoFile: videoFile?.filename || null,
+            fbPageId: merchant.fbPageId,
           });
         } else if (pp.platform === 'google' && merchant) {
           result = await publishToGoogle({

@@ -82,6 +82,9 @@ export const selectMetaPage = (mid, pageId) => api.post(`/oauth/meta/select-page
 export const getGoogleLocations = (mid) => api.get(`/oauth/google/locations/${mid}`).then(r => r.data);
 export const selectGoogleLocation = (mid, locationName) => api.post(`/oauth/google/select-location/${mid}`, { locationName }).then(r => r.data);
 
+// Analytics
+export const getAnalytics = (mid, period = 30) => api.get(`/analytics/${mid}?period=${period}`).then(r => r.data);
+
 // Bulk Schedule
 export const bulkUpload = (formData) => api.post('/bulk/upload', formData, {
   headers: { 'Content-Type': 'multipart/form-data' },

@@ -8,6 +8,7 @@ import {
   UserOutlined,
   CloudUploadOutlined,
   SendOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons';
 import { lazy, Suspense } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -17,6 +18,7 @@ const ManagePosts = lazy(() => import('./pages/ManagePosts'));
 const BulkSchedule = lazy(() => import('./pages/BulkSchedule'));
 const Clients = lazy(() => import('./pages/Clients'));
 const MerchantSettings = lazy(() => import('./pages/MerchantSettings'));
+const Analytics = lazy(() => import('./pages/Analytics'));
 const Login = lazy(() => import('./pages/Login'));
 
 const { Header, Content, Sider } = Layout;
@@ -28,6 +30,7 @@ const PAGE_TITLES = {
   '/bulk': 'Bulk Schedule',
   '/posts': 'Manage Posts',
   '/clients': 'Clients',
+  '/analytics': 'Analytics',
 };
 
 const menuItems = [
@@ -35,6 +38,7 @@ const menuItems = [
   { key: '/bulk', icon: <CloudUploadOutlined />, label: <NavLink to="/bulk">Bulk Schedule</NavLink> },
   { key: '/posts', icon: <UnorderedListOutlined />, label: <NavLink to="/posts">Manage Posts</NavLink> },
   { key: '/clients', icon: <TeamOutlined />, label: <NavLink to="/clients">Clients</NavLink> },
+  { key: '/analytics', icon: <BarChartOutlined />, label: <NavLink to="/analytics">Analytics</NavLink> },
 ];
 
 function PageHeader({ user, logout }) {
@@ -171,6 +175,7 @@ function AppLayout() {
               <Route path="/posts" element={<ManagePosts />} />
               <Route path="/bulk" element={<BulkSchedule />} />
               <Route path="/clients" element={<Clients />} />
+              <Route path="/analytics" element={<Analytics />} />
               <Route path="/settings/:id" element={<MerchantSettings />} />
               <Route path="*" element={<Navigate to="/create" replace />} />
             </Routes>

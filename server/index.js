@@ -37,6 +37,7 @@ app.use('/api/media', require('./routes/media'));
 app.use('/api/captions', require('./routes/captions'));
 app.use('/api/oauth', require('./routes/oauth'));
 app.use('/api/bulk', require('./routes/bulk'));
+app.use('/api/analytics', require('./routes/analytics'));
 
 // Health check
 app.get('/api/health', (_req, res) => {
