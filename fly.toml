@@ -2,6 +2,7 @@ app = 'social-posting-tool'
 primary_region = 'ord'
 
 [build]
+  dockerfile = "Dockerfile"
 
 [env]
   NODE_ENV = 'production'
