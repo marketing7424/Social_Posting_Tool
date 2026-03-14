@@ -1,0 +1,10 @@
+node_modules/
+.env
+.tmp/
+*.log
+.DS_Store
+.claude/
+data/
+uploads/
+skills-lock.json
+reference/
