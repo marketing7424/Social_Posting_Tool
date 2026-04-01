@@ -15,6 +15,7 @@ import {
   Tooltip,
   Checkbox,
   Select,
+  DatePicker,
 } from 'antd';
 import {
   ReloadOutlined,
@@ -103,6 +104,8 @@ export default function ManagePosts() {
     status: undefined,
     created_by: undefined,
     exclude_statuses: undefined,
+    date_from: dayjs().subtract(30, 'day').format('YYYY-MM-DD'),
+    date_to: dayjs().format('YYYY-MM-DD'),
   });
 
   // Selection state
@@ -195,7 +198,7 @@ export default function ManagePosts() {
   };
 
   const clearFilters = () => {
-    setFilters({ merchant: undefined, platform: undefined, status: undefined, created_by: undefined, exclude_statuses: undefined });
+    setFilters({ merchant: undefined, platform: undefined, status: undefined, created_by: undefined, exclude_statuses: undefined, date_from: dayjs().subtract(30, 'day').format('YYYY-MM-DD'), date_to: dayjs().format('YYYY-MM-DD') });
   };
 
   // --- Individual actions ---
@@ -710,6 +713,23 @@ export default function ManagePosts() {
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
             </select>
+          </Col>
+          <Col>
+            <DatePicker.RangePicker
+              value={[
+                filters.date_from ? dayjs(filters.date_from) : null,
+                filters.date_to ? dayjs(filters.date_to) : null,
+              ]}
+              onChange={(dates) => {
+                setFilters(prev => ({
+                  ...prev,
+                  date_from: dates?.[0]?.format('YYYY-MM-DD') || undefined,
+                  date_to: dates?.[1]?.format('YYYY-MM-DD') || undefined,
+                }));
+              }}
+              allowClear
+              style={{ width: 260 }}
+            />
           </Col>
           <Col>
             <Space>

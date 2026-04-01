@@ -65,7 +65,7 @@ router.post('/', (req, res) => {
 // GET /api/posts
 router.get('/', (req, res) => {
   const db = getDb();
-  const { merchant, platform, status, created_by, exclude_statuses, limit = 50, offset = 0 } = req.query;
+  const { merchant, platform, status, created_by, exclude_statuses, date_from, date_to, limit = 50, offset = 0 } = req.query;
 
   let sql = 'SELECT * FROM posts WHERE 1=1';
   const params = [];
@@ -73,6 +73,8 @@ router.get('/', (req, res) => {
   if (merchant) { sql += ' AND merchant_mid = ?'; params.push(merchant); }
   if (status) { sql += ' AND status = ?'; params.push(status); }
   if (created_by) { sql += ' AND created_by = ?'; params.push(created_by); }
+  if (date_from) { sql += ' AND created_at >= ?'; params.push(date_from); }
+  if (date_to) { sql += ' AND created_at <= ?'; params.push(date_to + ' 23:59:59'); }
   if (exclude_statuses) {
     const excluded = exclude_statuses.split(',').map(s => s.trim()).filter(Boolean);
     if (excluded.length > 0) {
