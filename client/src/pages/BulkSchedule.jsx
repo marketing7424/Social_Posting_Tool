@@ -873,6 +873,12 @@ export default function BulkSchedule() {
                   onRemove={(i) => removeMedia(row.id, i)}
                   onReorder={(newFiles) => reorderMedia(row.id, newFiles)}
                 />
+                {row.mediaFiles.length > 1 && (
+                  <Button type="link" danger size="small" style={{ padding: 0, fontSize: 11, marginTop: 4 }}
+                    onClick={() => setRows(prev => prev.map(r => r.id === row.id ? { ...r, mediaFiles: [] } : r))}>
+                    Clear all media
+                  </Button>
+                )}
               </div>
 
               {/* Captions — show one text area per selected platform with regenerate/style */}
