@@ -14,7 +14,6 @@ import {
   Col,
   Tooltip,
   Checkbox,
-  Select,
   DatePicker,
 } from 'antd';
 import {
@@ -99,12 +98,13 @@ export default function ManagePosts() {
   const [loading, setLoading] = useState(false);
 
   // Filter state
+  const DEFAULT_EXCLUDE = ['draft', 'failed', 'deleted', 'publishing'];
   const [filters, setFilters] = useState({
     merchant: undefined,
     platform: undefined,
     status: undefined,
     created_by: undefined,
-    exclude_statuses: undefined,
+    exclude_statuses: DEFAULT_EXCLUDE,
     date_from: dayjs().subtract(30, 'day').format('YYYY-MM-DD'),
     date_to: dayjs().format('YYYY-MM-DD'),
   });
@@ -204,7 +204,7 @@ export default function ManagePosts() {
   };
 
   const clearFilters = () => {
-    setFilters({ merchant: undefined, platform: undefined, status: undefined, created_by: undefined, exclude_statuses: undefined, date_from: dayjs().subtract(30, 'day').format('YYYY-MM-DD'), date_to: dayjs().format('YYYY-MM-DD') });
+    setFilters({ merchant: undefined, platform: undefined, status: undefined, created_by: undefined, exclude_statuses: DEFAULT_EXCLUDE, date_from: dayjs().subtract(30, 'day').format('YYYY-MM-DD'), date_to: dayjs().format('YYYY-MM-DD') });
   };
 
   // --- Individual actions ---
@@ -687,7 +687,15 @@ export default function ManagePosts() {
           <Col flex="160px">
             <select
               value={filters.status || ''}
-              onChange={(e) => handleFilterChange('status', e.target.value || undefined)}
+              onChange={(e) => {
+                const val = e.target.value || undefined;
+                setFilters(prev => ({
+                  ...prev,
+                  status: val,
+                  // When a specific status is chosen, clear exclude; when "All", restore defaults
+                  exclude_statuses: val ? undefined : DEFAULT_EXCLUDE,
+                }));
+              }}
               style={{ width: '100%', height: 36, borderRadius: 8, border: '1px solid #d9d9d9', padding: '0 8px', fontSize: 14 }}
             >
               <option value="">All Statuses</option>
@@ -695,18 +703,6 @@ export default function ManagePosts() {
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
             </select>
-          </Col>
-          <Col flex="200px">
-            <Select
-              mode="multiple"
-              allowClear
-              placeholder="Exclude Statuses"
-              value={filters.exclude_statuses || []}
-              onChange={(val) => handleFilterChange('exclude_statuses', val.length > 0 ? val : undefined)}
-              style={{ width: '100%' }}
-              options={STATUS_OPTIONS}
-              maxTagCount="responsive"
-            />
           </Col>
           <Col flex="160px">
             <select
