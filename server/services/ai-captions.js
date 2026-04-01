@@ -154,10 +154,17 @@ function getMediaType(filename) {
   return types[ext] || null;
 }
 
+function formatPhone(raw) {
+  if (!raw) return '(xxx) xxx-xxxx';
+  const d = raw.replace(/\D/g, '').slice(0, 10);
+  if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+  return raw;
+}
+
 function fillMerchantInfo(prompt, merchant) {
   return prompt
     .replace(/\{name\}/g, merchant.name || 'Business Name')
-    .replace(/\{phone\}/g, merchant.phone || '(xxx) xxx-xxxx')
+    .replace(/\{phone\}/g, formatPhone(merchant.phone))
     .replace(/\{address\}/g, merchant.address || 'Business Address')
     .replace(/\{website\}/g, merchant.website || '');
 }
@@ -189,7 +196,8 @@ async function loadImagesForAI(mediaFiles) {
   const files = (mediaFiles || []).slice(0, MAX_IMAGES_FOR_AI);
 
   for (const file of files) {
-    const filePath = path.isAbsolute(file) ? file : path.join(__dirname, '..', 'uploads', file);
+    const uploadsDir = process.env.NODE_ENV === 'production' ? '/data/uploads' : path.join(__dirname, '..', 'uploads');
+    const filePath = path.isAbsolute(file) ? file : path.join(uploadsDir, file);
     const mediaType = getMediaType(filePath);
     if (!mediaType) continue;
 
@@ -211,7 +219,7 @@ async function generateCaptions({ mediaFiles, merchantName, merchantPhone, merch
 
   const merchantInfo = {
     name: merchantName || 'this business',
-    phone: merchantPhone || '',
+    phone: formatPhone(merchantPhone),
     address: merchantAddress || '',
     website: merchantWebsite || '',
   };
@@ -319,7 +327,7 @@ async function regenerateCaption({ platform, currentCaption, feedback, merchantN
 
   const merchantInfo = {
     name: merchantName || 'this business',
-    phone: merchantPhone || '',
+    phone: formatPhone(merchantPhone),
     address: merchantAddress || '',
     website: merchantWebsite || '',
   };

@@ -10,6 +10,10 @@ import {
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+dayjs.extend(utc);
+dayjs.extend(timezone);
 import MerchantSearch from '../components/merchants/MerchantSearch';
 import MediaUploader from '../components/media/MediaUploader';
 import MediaGrid from '../components/media/MediaGrid';
@@ -90,14 +94,30 @@ export default function CreatePost() {
     }
     setGenerating(true);
     try {
+      // Generate captions excluding Google (defaults to empty/photo-only)
+      // FB and IG share the same caption — only generate for facebook, then copy to instagram
+      const captionPlatforms = selectedPlatforms.filter(p => p !== 'google');
+      if (captionPlatforms.length === 0) {
+        message.info('Google captions are not auto-generated. Type one manually or use Regenerate.');
+        setGenerating(false);
+        return;
+      }
+      const genPlatforms = captionPlatforms.includes('facebook') ? ['facebook'] :
+                           captionPlatforms.includes('instagram') ? ['instagram'] : captionPlatforms;
       const result = await generateCaptions({
         mediaFiles: mediaFiles.map(f => f.filename),
         merchantName: merchant?.dbaName || merchant?.mid || '',
         merchantPhone: merchant?.phone || '',
         merchantAddress: merchant?.address || '',
         merchantWebsite: merchant?.website || '',
-        platforms: selectedPlatforms,
+        platforms: genPlatforms,
       });
+      // Sync FB and IG to the same caption
+      const sharedCaption = result.facebook || result.instagram || '';
+      if (sharedCaption) {
+        result.facebook = sharedCaption;
+        result.instagram = sharedCaption;
+      }
       setCaptions(prev => ({ ...prev, ...result }));
       message.success('Captions generated!');
     } catch (err) {
@@ -120,7 +140,11 @@ export default function CreatePost() {
         merchantWebsite: merchant?.website || '',
         mediaFiles: mediaFiles.map(f => f.filename),
       });
-      setCaptions(prev => ({ ...prev, [platform]: result.caption }));
+      // Sync FB and IG captions
+      const updated = { [platform]: result.caption };
+      if (platform === 'facebook') updated.instagram = result.caption;
+      if (platform === 'instagram') updated.facebook = result.caption;
+      setCaptions(prev => ({ ...prev, ...updated }));
       message.success(`${platform} caption regenerated`);
     } catch (err) {
       message.error('Regeneration failed');
@@ -336,19 +360,35 @@ export default function CreatePost() {
           <Space wrap>
             <Button
               type="primary"
-              icon={<SendOutlined />}
+              icon={publishResults?.status === 'done' ? <CheckCircleFilled /> : <SendOutlined />}
               size="large"
               loading={publishing}
-              disabled={!merchant || !hasContent}
+              disabled={!merchant || !hasContent || publishResults?.status === 'done'}
               onClick={handlePublish}
+              style={publishResults?.status === 'done' ? { background: '#52c41a', borderColor: '#52c41a' } : undefined}
             >
-              Post Now
+              {publishResults?.status === 'done' ? 'Posted!' : 'Post Now'}
             </Button>
             <Button
               icon={<ClockCircleOutlined />}
               size="large"
               disabled={!merchant || !hasContent}
-              onClick={() => setScheduleVisible(true)}
+              onClick={() => {
+                // Default to tomorrow at 10 AM in the merchant's timezone
+                if (!scheduleDate) {
+                  setScheduleDate(dayjs().add(1, 'day'));
+                }
+                if (!scheduleTime) {
+                  if (merchant?.timezone) {
+                    // 10 AM in the merchant's timezone, converted to local
+                    const tenAm = dayjs().tz(merchant.timezone).startOf('day').hour(10);
+                    setScheduleTime(tenAm.local());
+                  } else {
+                    setScheduleTime(dayjs().hour(10).minute(0).second(0));
+                  }
+                }
+                setScheduleVisible(true);
+              }}
             >
               Schedule
             </Button>
@@ -460,6 +500,11 @@ export default function CreatePost() {
         okText="Schedule"
       >
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          {merchant?.timezone && (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Times shown in {merchant.timezone.replace(/^America\//, '').replace(/_/g, ' ')} time ({merchant.timezone})
+            </Text>
+          )}
           <div>
             <Text strong>Date</Text>
             <DatePicker

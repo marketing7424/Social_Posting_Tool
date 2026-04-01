@@ -5,7 +5,9 @@ const fs = require('fs');
 const { v4: uuid } = require('uuid');
 
 const router = express.Router();
-const UPLOADS_DIR = path.join(__dirname, '..', '..', 'uploads');
+const UPLOADS_DIR = process.env.NODE_ENV === 'production'
+  ? '/data/uploads'
+  : path.join(__dirname, '..', '..', 'uploads');
 
 // Ensure uploads directory exists
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });

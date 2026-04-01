@@ -3,8 +3,8 @@ import { Input } from 'antd';
 function formatPhone(digits) {
   if (!digits) return '';
   if (digits.length <= 3) return `(${digits}`;
-  if (digits.length <= 6) return `(${digits.slice(0, 3)}) \u2013 ${digits.slice(3)}`;
-  return `(${digits.slice(0, 3)}) \u2013 ${digits.slice(3, 6)} ${digits.slice(6, 10)}`;
+  if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6, 10)}`;
 }
 
 function stripNonDigits(str) {
@@ -25,7 +25,7 @@ export default function PhoneInput({ value, onChange, ...rest }) {
       {...rest}
       value={display}
       onChange={handleChange}
-      placeholder="(555) – 123 4567"
+      placeholder="(555) 123-4567"
       maxLength={18}
     />
   );

@@ -1,25 +1,25 @@
 app = 'social-posting-tool'
-primary_region = 'ord'
+primary_region = 'iad'
 
 [build]
   dockerfile = "Dockerfile"
 
 [env]
   NODE_ENV = 'production'
-  PORT = '3001'
+  PORT = '8080'
 
 [http_service]
-  internal_port = 3001
+  internal_port = 8080
   force_https = true
   auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
 [mounts]
   source = 'spt_data'
   destination = '/data'
 
 [[vm]]
-  memory = '256mb'
+  memory = '1024mb'
   cpu_kind = 'shared'
   cpus = 1

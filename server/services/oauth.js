@@ -10,8 +10,10 @@ function updateMerchant(mid, updates) {
   const db = getDb();
   const fieldMap = {
     fbPageId: 'fb_page_id', fbToken: 'fb_token', fbPageName: 'fb_page_name',
+    fbTokenCreatedAt: 'fb_token_created_at',
     igUserId: 'ig_user_id', igToken: 'ig_token', igUsername: 'ig_username',
     googleToken: 'google_token', googleLocationId: 'google_location_id', googleLocationName: 'google_location_name',
+    googleTokenCreatedAt: 'google_token_created_at',
   };
 
   const fields = [];
@@ -169,6 +171,7 @@ async function selectMetaPage(mid, pageId, pageAccessToken, pageName, userToken)
     fbPageId: pageId,
     fbToken: token,
     fbPageName: pageName || '',
+    fbTokenCreatedAt: new Date().toISOString(),
   };
 
   // Check for linked Instagram Business account using both tokens
@@ -288,6 +291,7 @@ async function handleGoogleCallback(code, mid) {
       googleToken: refreshToken,
       googleLocationId: loc.name,
       googleLocationName: loc.title || '',
+      googleTokenCreatedAt: new Date().toISOString(),
     };
     updateMerchant(mid, updates);
     return { autoSelected: true, updates };
@@ -300,6 +304,7 @@ async function handleGoogleCallback(code, mid) {
 // Fetch all Google Business locations across all accounts
 async function listGoogleLocations(authClient) {
   const locations = [];
+  const seenLocations = new Set();
   try {
     // Get access token for REST calls
     const { token } = await authClient.getAccessToken();
@@ -311,29 +316,38 @@ async function listGoogleLocations(authClient) {
     const accountList = accountsResp.data.accounts || [];
     console.log('[oauth] Google accounts found:', accountList.map(a => a.accountName || a.name).join(', '));
 
-    // Step 2: List locations for each account via Business Information API
+    // Step 2: List locations for each account via Business Information API (with pagination)
     for (const account of accountList) {
       try {
-        const locsResp = await axios.get(
-          `https://mybusinessbusinessinformation.googleapis.com/v1/${account.name}/locations`,
-          {
-            headers: { Authorization: `Bearer ${token}` },
-            params: { readMask: 'name,title,storefrontAddress' },
+        let nextPageToken = null;
+        do {
+          const params = { readMask: 'name,title,storefrontAddress', pageSize: 100 };
+          if (nextPageToken) params.pageToken = nextPageToken;
+          const locsResp = await axios.get(
+            `https://mybusinessbusinessinformation.googleapis.com/v1/${account.name}/locations`,
+            {
+              headers: { Authorization: `Bearer ${token}` },
+              params,
+            }
+          );
+          for (const loc of (locsResp.data.locations || [])) {
+            const fullName = `${account.name}/${loc.name}`;
+            if (seenLocations.has(loc.name)) continue;
+            seenLocations.add(loc.name);
+            const addr = loc.storefrontAddress;
+            const addressStr = addr
+              ? [addr.addressLines?.join(', '), addr.locality, addr.administrativeArea, addr.postalCode]
+                  .filter(Boolean).join(', ')
+              : '';
+            locations.push({
+              name: fullName,
+              title: loc.title || '',
+              address: addressStr,
+              accountName: account.accountName || account.name,
+            });
           }
-        );
-        for (const loc of (locsResp.data.locations || [])) {
-          const addr = loc.storefrontAddress;
-          const addressStr = addr
-            ? [addr.addressLines?.join(', '), addr.locality, addr.administrativeArea, addr.postalCode]
-                .filter(Boolean).join(', ')
-            : '';
-          locations.push({
-            name: loc.name,
-            title: loc.title || '',
-            address: addressStr,
-            accountName: account.accountName || account.name,
-          });
-        }
+          nextPageToken = locsResp.data.nextPageToken || null;
+        } while (nextPageToken);
       } catch (err) {
         console.error(`[oauth] Failed to list locations for ${account.name}:`, err.response?.data?.error?.message || err.message);
       }
@@ -350,6 +364,7 @@ function selectGoogleLocation(mid, refreshToken, locationName, locationTitle) {
     googleToken: refreshToken,
     googleLocationId: locationName,
     googleLocationName: locationTitle || '',
+    googleTokenCreatedAt: new Date().toISOString(),
   };
   updateMerchant(mid, updates);
   return updates;

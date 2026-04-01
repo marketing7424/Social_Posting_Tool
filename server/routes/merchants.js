@@ -1,5 +1,6 @@
 const express = require('express');
 const { getDb } = require('../services/db');
+const { timezoneFromAddress } = require('../services/zip-timezone');
 
 const router = express.Router();
 
@@ -31,6 +32,9 @@ function rowToMerchant(row) {
     googleToken: row.google_token || '',
     googleLocationId: row.google_location_id || '',
     googleLocationName: row.google_location_name || '',
+    timezone: row.timezone || '',
+    fbTokenCreatedAt: row.fb_token_created_at || '',
+    googleTokenCreatedAt: row.google_token_created_at || '',
     created: row.created_at || '',
     updated: row.updated_at || '',
   };
@@ -75,9 +79,10 @@ router.post('/', (req, res) => {
   }
 
   const formattedPhone = formatPhone(phone);
+  const detectedTz = timezoneFromAddress(address) || '';
   db.prepare(
-    'INSERT INTO merchants (mid, dba_name, address, phone, website) VALUES (?, ?, ?, ?, ?)'
-  ).run(mid, dbaName, address || '', formattedPhone, website || '');
+    'INSERT INTO merchants (mid, dba_name, address, phone, website, timezone) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(mid, dbaName, address || '', formattedPhone, website || '', detectedTz);
 
   const merchant = db.prepare('SELECT * FROM merchants WHERE mid = ?').get(mid);
   res.status(201).json(rowToMerchant(merchant));
@@ -95,10 +100,19 @@ router.patch('/:mid', (req, res) => {
 
   const fieldMap = {
     dbaName: 'dba_name', address: 'address', phone: 'phone', website: 'website',
+    timezone: 'timezone',
     fbPageId: 'fb_page_id', fbToken: 'fb_token', fbPageName: 'fb_page_name',
     igUserId: 'ig_user_id', igToken: 'ig_token', igUsername: 'ig_username',
     googleToken: 'google_token', googleLocationId: 'google_location_id', googleLocationName: 'google_location_name',
   };
+
+  // Auto-detect timezone when address changes (unless timezone is explicitly provided)
+  if (updates.address && updates.timezone === undefined) {
+    const detectedTz = timezoneFromAddress(updates.address);
+    if (detectedTz) {
+      updates.timezone = detectedTz;
+    }
+  }
 
   for (const [key, col] of Object.entries(fieldMap)) {
     if (updates[key] !== undefined) {
@@ -111,7 +125,12 @@ router.patch('/:mid', (req, res) => {
   if (fields.length > 0) {
     fields.push("updated_at = datetime('now')");
     values.push(req.params.mid);
-    db.prepare(`UPDATE merchants SET ${fields.join(', ')} WHERE mid = ?`).run(...values);
+    try {
+      db.prepare(`UPDATE merchants SET ${fields.join(', ')} WHERE mid = ?`).run(...values);
+    } catch (err) {
+      console.error('[merchants] PATCH update error:', err.message);
+      return res.status(500).json({ error: 'Database update failed: ' + err.message });
+    }
   }
 
   const updated = db.prepare('SELECT * FROM merchants WHERE mid = ?').get(req.params.mid);

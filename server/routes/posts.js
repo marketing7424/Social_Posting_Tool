@@ -1,4 +1,6 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
 const { v4: uuid } = require('uuid');
 const { getDb } = require('../services/db');
 const { publishToFacebook, publishToInstagram, publishToGoogle } = require('../services/publisher');
@@ -21,6 +23,7 @@ function getMerchantFromDb(mid) {
     igToken: row.ig_token,
     googleToken: row.google_token,
     googleLocationId: row.google_location_id,
+    timezone: row.timezone || '',
   };
 }
 
@@ -62,13 +65,14 @@ router.post('/', (req, res) => {
 // GET /api/posts
 router.get('/', (req, res) => {
   const db = getDb();
-  const { merchant, platform, status, limit = 50, offset = 0 } = req.query;
+  const { merchant, platform, status, created_by, limit = 50, offset = 0 } = req.query;
 
   let sql = 'SELECT * FROM posts WHERE 1=1';
   const params = [];
 
   if (merchant) { sql += ' AND merchant_mid = ?'; params.push(merchant); }
   if (status) { sql += ' AND status = ?'; params.push(status); }
+  if (created_by) { sql += ' AND created_by = ?'; params.push(created_by); }
 
   sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
   params.push(Number(limit), Number(offset));
@@ -79,7 +83,12 @@ router.get('/', (req, res) => {
     let platforms = db.prepare('SELECT * FROM post_platforms WHERE post_id = ?').all(post.id);
     if (platform) platforms = platforms.filter(p => p.platform === platform);
     const media = db.prepare('SELECT * FROM post_media WHERE post_id = ? ORDER BY sort_order').all(post.id);
-    return { ...post, platforms, media };
+    let created_by_name = null;
+    if (post.created_by) {
+      const user = db.prepare('SELECT display_name, email FROM users WHERE id = ?').get(post.created_by);
+      if (user) created_by_name = user.display_name || user.email;
+    }
+    return { ...post, created_by_name, platforms, media };
   });
 
   // Filter out posts that have no matching platform if platform filter is set
@@ -104,7 +113,15 @@ router.patch('/:id', (req, res) => {
   const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(req.params.id);
   if (!post) return res.status(404).json({ error: 'Post not found' });
 
-  const { captions, scheduledTime, fbLayout, mediaOrder } = req.body;
+  const { captions, scheduledTime, fbLayout, mediaOrder, status, previousStatus } = req.body;
+
+  if (status) {
+    if (previousStatus) {
+      db.prepare('UPDATE posts SET status = ?, previous_status = ? WHERE id = ?').run(status, previousStatus, post.id);
+    } else {
+      db.prepare('UPDATE posts SET status = ? WHERE id = ?').run(status, post.id);
+    }
+  }
 
   if (scheduledTime !== undefined) {
     db.prepare('UPDATE posts SET scheduled_time = ? WHERE id = ?').run(scheduledTime, post.id);
@@ -141,10 +158,17 @@ async function publishInBackground(postId) {
 
   const platforms = db.prepare('SELECT * FROM post_platforms WHERE post_id = ?').all(post.id);
   const media = db.prepare('SELECT filename, mimetype FROM post_media WHERE post_id = ? ORDER BY sort_order').all(post.id);
-  const mediaFiles = media.map(m => m.filename);
-  const hasVideo = media.some(m => m.mimetype?.startsWith('video/'));
-  const videoFile = media.find(m => m.mimetype?.startsWith('video/'));
-  const imageFiles = media.filter(m => !m.mimetype?.startsWith('video/')).map(m => m.filename);
+
+  // Filter out media files that no longer exist on disk
+  const uploadsDir = process.env.NODE_ENV === 'production' ? '/data/uploads' : path.join(__dirname, '..', 'uploads');
+  const existingMedia = media.filter(m => {
+    try { return fs.existsSync(path.join(uploadsDir, m.filename)); } catch { return false; }
+  });
+
+  const mediaFiles = existingMedia.map(m => m.filename);
+  const hasVideo = existingMedia.some(m => m.mimetype?.startsWith('video/'));
+  const videoFile = existingMedia.find(m => m.mimetype?.startsWith('video/'));
+  const imageFiles = existingMedia.filter(m => !m.mimetype?.startsWith('video/')).map(m => m.filename);
   const merchant = getMerchantFromDb(post.merchant_mid);
 
   // Publish platforms sequentially to avoid cross-posting duplication.
@@ -168,7 +192,10 @@ async function publishInBackground(postId) {
           videoFile: videoFile?.filename || null,
         });
         // Save image URLs so Instagram can reuse them (no duplicate upload)
-        if (result?.imageUrls) fbImageUrls = result.imageUrls;
+        // Skip for collage layouts — hero image is cropped and may violate IG aspect ratio limits
+        if (result?.imageUrls && (post.fb_layout === 'album' || mediaFiles.length === 1)) {
+          fbImageUrls = result.imageUrls;
+        }
       } else if (pp.platform === 'instagram' && merchant) {
         result = await publishToInstagram({
           igUserId: merchant.igUserId, accessToken: merchant.igToken,
@@ -186,13 +213,15 @@ async function publishInBackground(postId) {
         throw new Error(`Missing credentials for ${pp.platform}`);
       }
 
-      db.prepare("UPDATE post_platforms SET status = 'success', platform_post_id = ? WHERE id = ?")
+      db.prepare("UPDATE post_platforms SET status = 'success', platform_post_id = ?, published_at = datetime('now') WHERE id = ?")
         .run(result?.postId || null, pp.id);
       settled.push({ platform: pp.platform, status: 'success', postId: result?.postId });
     } catch (err) {
+      const errMsg = err.response?.data?.error?.message || err.response?.data?.error_description || err.message;
+      console.error(`[publish] ${pp.platform} error:`, errMsg);
       db.prepare("UPDATE post_platforms SET status = 'failed', error = ? WHERE id = ?")
-        .run(err.message, pp.id);
-      settled.push({ platform: pp.platform, status: 'failed', error: err.message });
+        .run(errMsg, pp.id);
+      settled.push({ platform: pp.platform, status: 'failed', error: errMsg });
     }
   }
   const anySuccess = settled.some(r => r.status === 'success');
@@ -322,15 +351,17 @@ router.post('/:id/retry', async (req, res) => {
         throw new Error(`Missing credentials for ${pp.platform}`);
       }
 
-      db.prepare("UPDATE post_platforms SET status = 'success', platform_post_id = ? WHERE id = ?")
+      db.prepare("UPDATE post_platforms SET status = 'success', platform_post_id = ?, published_at = datetime('now') WHERE id = ?")
         .run(result?.postId || null, pp.id);
       results[pp.platform] = { status: 'success', postId: result?.postId };
       anySuccess = true;
     } catch (err) {
       allSuccess = false;
+      const errMsg = err.response?.data?.error?.message || err.response?.data?.error_description || err.message;
+      console.error(`[publish-retry] ${pp.platform} error:`, errMsg);
       db.prepare("UPDATE post_platforms SET status = 'failed', error = ? WHERE id = ?")
-        .run(err.message, pp.id);
-      results[pp.platform] = { status: 'failed', error: err.message };
+        .run(errMsg, pp.id);
+      results[pp.platform] = { status: 'failed', error: errMsg };
     }
   }
 

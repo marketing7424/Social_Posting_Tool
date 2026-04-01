@@ -1,6 +1,12 @@
 const cron = require('node-cron');
+const fs = require('fs');
+const path = require('path');
 const { getDb } = require('./db');
 const { publishToFacebook, publishToInstagram, publishToGoogle } = require('./publisher');
+
+const UPLOADS_DIR = process.env.NODE_ENV === 'production'
+  ? '/data/uploads'
+  : path.join(__dirname, '..', '..', 'uploads');
 
 const MAX_RETRIES = 3;
 
@@ -32,6 +38,89 @@ function initScheduler() {
     }
   });
   console.log('[scheduler] Started - checking every minute');
+
+  // Clean up posts older than 2 months — runs daily at 3 AM
+  cron.schedule('0 3 * * *', () => {
+    try {
+      cleanupOldPosts();
+    } catch (err) {
+      console.error('[scheduler] Cleanup error:', err.message);
+    }
+  });
+
+  // Also run cleanup on startup
+  try { cleanupOldPosts(); } catch (_) {}
+}
+
+function cleanupOldPosts() {
+  const db = getDb();
+  const cutoff = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(); // 2 months ago
+
+  // Delete related records first, then posts
+  const oldPosts = db.prepare('SELECT id FROM posts WHERE created_at < ?').all(cutoff);
+  if (oldPosts.length === 0) return;
+
+  const ids = oldPosts.map(p => p.id);
+  const placeholders = ids.map(() => '?').join(',');
+
+  // Collect media filenames before deleting records
+  const mediaFiles = db.prepare(
+    `SELECT filename FROM post_media WHERE post_id IN (${placeholders})`
+  ).all(...ids).map(m => m.filename);
+
+  db.prepare(`DELETE FROM post_platforms WHERE post_id IN (${placeholders})`).run(...ids);
+  db.prepare(`DELETE FROM post_media WHERE post_id IN (${placeholders})`).run(...ids);
+  const result = db.prepare(`DELETE FROM posts WHERE id IN (${placeholders})`).run(...ids);
+
+  if (result.changes > 0) {
+    console.log(`[scheduler] Cleaned up ${result.changes} posts older than 2 months`);
+  }
+
+  // Delete media files from disk that are no longer referenced by any post
+  let deletedFiles = 0;
+  for (const filename of mediaFiles) {
+    const stillUsed = db.prepare('SELECT 1 FROM post_media WHERE filename = ? LIMIT 1').get(filename);
+    if (!stillUsed) {
+      const filePath = path.join(UPLOADS_DIR, filename);
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          deletedFiles++;
+        }
+      } catch (_) {}
+    }
+  }
+  if (deletedFiles > 0) {
+    console.log(`[scheduler] Deleted ${deletedFiles} orphaned media files`);
+  }
+
+  // Clean up any orphaned files older than 7 days not referenced in DB
+  cleanupOrphanedUploads(db);
+}
+
+function cleanupOrphanedUploads(db) {
+  try {
+    if (!fs.existsSync(UPLOADS_DIR)) return;
+    const files = fs.readdirSync(UPLOADS_DIR);
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    let deleted = 0;
+
+    for (const file of files) {
+      const filePath = path.join(UPLOADS_DIR, file);
+      try {
+        const stat = fs.statSync(filePath);
+        if (stat.mtimeMs > sevenDaysAgo) continue; // too recent, skip
+        const referenced = db.prepare('SELECT 1 FROM post_media WHERE filename = ? LIMIT 1').get(file);
+        if (!referenced) {
+          fs.unlinkSync(filePath);
+          deleted++;
+        }
+      } catch (_) {}
+    }
+    if (deleted > 0) {
+      console.log(`[scheduler] Deleted ${deleted} orphaned upload files (>7 days, unreferenced)`);
+    }
+  } catch (_) {}
 }
 
 const publishingPosts = new Set();
@@ -106,7 +195,7 @@ async function processScheduledPosts() {
         }
 
         db.prepare(
-          "UPDATE post_platforms SET status = 'success', platform_post_id = ? WHERE id = ?"
+          "UPDATE post_platforms SET status = 'success', platform_post_id = ?, published_at = datetime('now') WHERE id = ?"
         ).run(result?.postId || null, pp.id);
         anySuccess = true;
       } catch (err) {

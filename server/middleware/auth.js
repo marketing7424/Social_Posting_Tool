@@ -50,4 +50,23 @@ function optionalAuth(req, _res, next) {
   next();
 }
 
-module.exports = { authenticate, optionalAuth, generateTokens, JWT_SECRET };
+const ADMIN_EMAILS = [
+  'marketing@richpaymentsolutions.com',
+  'hoang.tran@richpaymentsolutions.com',
+];
+
+// Middleware: require admin role
+function requireAdmin(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  const { getDb } = require('../services/db');
+  const db = getDb();
+  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id);
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  next();
+}
+
+module.exports = { authenticate, optionalAuth, generateTokens, requireAdmin, JWT_SECRET, ADMIN_EMAILS };

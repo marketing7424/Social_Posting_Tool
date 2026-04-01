@@ -1,7 +1,7 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
-  Button, Space, message, Typography, Input, Upload, DatePicker, TimePicker,
-  Select, Popconfirm, Tag, Popover, Tooltip, Divider,
+  Button, Space, message, Typography, Input, Upload,
+  Tag, Tooltip, Divider, Modal,
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, SendOutlined, ClockCircleOutlined,
@@ -65,66 +65,87 @@ function createEmptyRow() {
 
 /* ── Merchant Select ─────────────────────────────────── */
 function RowMerchantSelect({ value, onChange }) {
-  const [options, setOptions] = useState([]);
-  const [fetching, setFetching] = useState(false);
-  const merchantsRef = useRef([]);
-  const timerRef = useRef(null);
+  const [merchants, setMerchants] = useState([]);
+  const [search, setSearch] = useState('');
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef(null);
 
-  const handleSearch = useCallback((search) => {
-    clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(async () => {
-      setFetching(true);
-      try {
-        const results = await searchMerchants(search);
-        const merchants = Array.isArray(results) ? results : [];
-        merchantsRef.current = merchants;
-        setOptions(merchants.map(m => ({
-          value: m.mid,
-          displayLabel: m.dbaName || m.mid,
-          label: (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>{m.dbaName || m.mid}</span>
-              {m.dbaName && <span style={{ fontSize: 10, color: '#94A3B8' }}>{m.mid}</span>}
-            </div>
-          ),
-        })));
-      } catch {
-        setOptions([]);
-      } finally {
-        setFetching(false);
-      }
-    }, 300);
+  useEffect(() => {
+    searchMerchants('').then(results => {
+      setMerchants(Array.isArray(results) ? results : []);
+    }).catch(() => {});
   }, []);
 
-  const handleChange = (selected) => {
-    if (!selected) { onChange(null); return; }
-    const merchant = merchantsRef.current.find(m => m.mid === selected.value);
-    onChange(merchant || { mid: selected.value });
-  };
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handler = (e) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
 
-  const handleFocus = () => { if (options.length === 0) handleSearch(''); };
+  const filtered = search.trim()
+    ? merchants.filter(m =>
+        (m.mid || '').toLowerCase().includes(search.toLowerCase()) ||
+        (m.dbaName || '').toLowerCase().includes(search.toLowerCase())
+      )
+    : merchants;
 
-  const selectValue = value?.mid
-    ? { value: value.mid, label: value.dbaName || value.mid }
-    : undefined;
+  const displayValue = value ? (value.dbaName || value.mid) : '';
 
   return (
-    <Select
-      showSearch
-      labelInValue
-      value={selectValue}
-      placeholder="Select client..."
-      filterOption={false}
-      onSearch={handleSearch}
-      onChange={handleChange}
-      onFocus={handleFocus}
-      loading={fetching}
-      options={options}
-      optionLabelProp="displayLabel"
-      allowClear
-      size="small"
-      style={{ width: '100%' }}
-    />
+    <div ref={wrapperRef} style={{ position: 'relative', width: '100%' }}>
+      <input
+        type="text"
+        value={open ? search : displayValue}
+        placeholder="Search MID or name..."
+        onFocus={() => { setOpen(true); setSearch(''); }}
+        onChange={(e) => { setSearch(e.target.value); setOpen(true); }}
+        style={{
+          width: '100%', height: 30, borderRadius: 6,
+          border: '1px solid #d9d9d9', padding: '0 8px',
+          fontSize: 13, color: '#1E293B', background: '#fff',
+          outline: 'none',
+        }}
+      />
+      {value && !open && (
+        <span
+          onClick={() => { onChange(null); setSearch(''); }}
+          style={{
+            position: 'absolute', right: 6, top: 6,
+            cursor: 'pointer', color: '#bfbfbf', fontSize: 13, lineHeight: 1,
+          }}
+        >&times;</span>
+      )}
+      {open && (
+        <div style={{
+          position: 'absolute', top: 32, left: 0, right: 0,
+          maxHeight: 200, overflowY: 'auto', background: '#fff',
+          border: '1px solid #d9d9d9', borderRadius: 6,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.1)', zIndex: 1050,
+        }}>
+          {filtered.length === 0 ? (
+            <div style={{ padding: '8px 12px', color: '#bfbfbf', fontSize: 13 }}>No clients found</div>
+          ) : filtered.map(m => (
+            <div
+              key={m.mid}
+              onClick={() => { onChange(m); setSearch(''); setOpen(false); }}
+              style={{
+                padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                display: 'flex', justifyContent: 'space-between',
+                background: value?.mid === m.mid ? '#F0F5FF' : '#fff',
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#F0F5FF'}
+              onMouseLeave={(e) => e.currentTarget.style.background = value?.mid === m.mid ? '#F0F5FF' : '#fff'}
+            >
+              <span>{m.dbaName || m.mid}</span>
+              <span style={{ fontSize: 11, color: '#94A3B8' }}>{m.mid}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -275,45 +296,59 @@ function RowScheduleOption({ mode, date, time, onModeChange, onDateChange, onTim
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
-      <Popover
-        open={open} onOpenChange={setOpen} trigger="click" placement="bottomRight"
-        content={
-          <div style={{ width: 270 }}>
-            <div style={{ display: 'flex', marginBottom: 12, borderRadius: 6, overflow: 'hidden', border: '1px solid #E2E8F0' }}>
-              {['now', 'schedule'].map(m => (
-                <div key={m} onClick={() => onModeChange(m)} style={{
-                  flex: 1, textAlign: 'center', padding: '6px 0', cursor: 'pointer',
-                  background: mode === m ? '#F1F5F9' : '#fff',
-                  fontWeight: mode === m ? 600 : 400, fontSize: 13,
-                  borderRight: m === 'now' ? '1px solid #E2E8F0' : 'none',
-                }}>
-                  {m === 'now' ? 'Publish now' : 'Schedule'}
-                </div>
-              ))}
-            </div>
-            {mode === 'schedule' && (
-              <>
-                <Text strong style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>Date and time</Text>
-                <Space>
-                  <DatePicker size="small" value={date} onChange={onDateChange}
-                    disabledDate={c => c && c.isBefore(dayjs(), 'day')} style={{ width: 125 }} />
-                  <TimePicker size="small" value={time} onChange={onTimeChange}
-                    format="hh:mm A" use12Hours minuteStep={5} style={{ width: 105 }} />
-                </Space>
-              </>
-            )}
-            <div style={{ marginTop: 10, textAlign: 'right' }}>
-              <Button size="small" type="primary" onClick={() => setOpen(false)}>
-                {mode === 'schedule' ? 'Update' : 'OK'}
-              </Button>
-            </div>
-          </div>
-        }
+      <Button size="small" style={{ minWidth: 115, fontSize: 12 }} onClick={() => setOpen(true)}>
+        {mode === 'now' ? 'Publish now' : 'Schedule'} <ClockCircleOutlined />
+      </Button>
+      <Modal
+        title="Scheduling"
+        open={open}
+        onCancel={() => setOpen(false)}
+        onOk={() => setOpen(false)}
+        okText={mode === 'schedule' ? 'Update' : 'OK'}
+        width={340}
+        styles={{ body: { overflow: 'visible' } }}
       >
-        <Button size="small" style={{ minWidth: 115, fontSize: 12 }}>
-          {mode === 'now' ? 'Publish now' : 'Schedule'} <ClockCircleOutlined />
-        </Button>
-      </Popover>
+        <div style={{ display: 'flex', marginBottom: 12, borderRadius: 6, overflow: 'hidden', border: '1px solid #E2E8F0' }}>
+          {['now', 'schedule'].map(m => (
+            <div key={m} onClick={() => onModeChange(m)} style={{
+              flex: 1, textAlign: 'center', padding: '6px 0', cursor: 'pointer',
+              background: mode === m ? '#F1F5F9' : '#fff',
+              fontWeight: mode === m ? 600 : 400, fontSize: 13,
+              borderRight: m === 'now' ? '1px solid #E2E8F0' : 'none',
+            }}>
+              {m === 'now' ? 'Publish now' : 'Schedule'}
+            </div>
+          ))}
+        </div>
+        {mode === 'schedule' && (
+          <>
+            <Text strong style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>Date and time</Text>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
+              <input
+                type="date"
+                value={date ? date.format('YYYY-MM-DD') : ''}
+                min={dayjs().format('YYYY-MM-DD')}
+                onChange={(e) => onDateChange(e.target.value ? dayjs(e.target.value) : null)}
+                style={{
+                  width: '100%', height: 36, borderRadius: 8,
+                  border: '1px solid #d9d9d9', padding: '0 10px',
+                  fontSize: 14, color: '#1E293B',
+                }}
+              />
+              <input
+                type="time"
+                value={time ? time.format('HH:mm') : ''}
+                onChange={(e) => onTimeChange(e.target.value ? dayjs(`2000-01-01 ${e.target.value}`) : null)}
+                style={{
+                  width: '100%', height: 36, borderRadius: 8,
+                  border: '1px solid #d9d9d9', padding: '0 10px',
+                  fontSize: 14, color: '#1E293B',
+                }}
+              />
+            </div>
+          </>
+        )}
+      </Modal>
       {mode === 'schedule' && date && (
         <Text type="secondary" style={{ fontSize: 10 }}>
           {date.format('MMM D, YYYY')}{time ? `, ${time.format('h:mm A')}` : ''}
@@ -435,7 +470,7 @@ function PublishResultsSummary({ rows }) {
   );
 }
 
-/* ── Adjust Style Popover Button ──────────────────────── */
+/* ── Adjust Style Modal Button ──────────────────────── */
 function AdjustStyleButton({ platform, loading, onRegenerate }) {
   const [open, setOpen] = useState(false);
   const [feedback, setFeedback] = useState('');
@@ -447,51 +482,43 @@ function AdjustStyleButton({ platform, loading, onRegenerate }) {
   };
 
   return (
-    <Popover
-      open={open}
-      onOpenChange={setOpen}
-      trigger="click"
-      placement="bottomRight"
-      content={
-        <div style={{ width: 280 }}>
-          <Text strong style={{ display: 'block', marginBottom: 6, fontSize: 12 }}>
-            How should AI change this caption?
-          </Text>
-          <div style={{ marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-            {QUICK_SUGGESTIONS.map(s => (
-              <Tag key={s.label}
-                style={{ cursor: 'pointer', marginRight: 0, fontSize: 11 }}
-                color={feedback === s.value ? 'blue' : undefined}
-                onClick={() => setFeedback(s.value)}
-              >
-                {s.label}
-              </Tag>
-            ))}
-          </div>
-          <TextArea
-            value={feedback}
-            onChange={(e) => setFeedback(e.target.value)}
-            placeholder="Or type custom instructions..."
-            autoSize={{ minRows: 2, maxRows: 3 }}
-            style={{ marginBottom: 8, fontSize: 12 }}
-          />
-          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-            <Button size="small" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button size="small" type="primary" icon={<ReloadOutlined />}
-              onClick={handleSubmit} loading={loading}>
-              Regenerate
-            </Button>
-          </div>
-        </div>
-      }
-    >
+    <>
       <Tooltip title="Adjust style">
         <Button type="text" size="small"
           icon={<EditOutlined style={{ fontSize: 11 }} />}
           style={{ padding: '0 4px', height: 20, fontSize: 11 }}
+          onClick={() => setOpen(true)}
         />
       </Tooltip>
-    </Popover>
+      <Modal
+        title="How should AI change this caption?"
+        open={open}
+        onCancel={() => setOpen(false)}
+        onOk={handleSubmit}
+        okText="Regenerate"
+        okButtonProps={{ icon: <ReloadOutlined />, loading }}
+        width={360}
+      >
+        <div style={{ marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+          {QUICK_SUGGESTIONS.map(s => (
+            <Tag key={s.label}
+              style={{ cursor: 'pointer', marginRight: 0, fontSize: 11 }}
+              color={feedback === s.value ? 'blue' : undefined}
+              onClick={() => setFeedback(s.value)}
+            >
+              {s.label}
+            </Tag>
+          ))}
+        </div>
+        <TextArea
+          value={feedback}
+          onChange={(e) => setFeedback(e.target.value)}
+          placeholder="Or type custom instructions..."
+          autoSize={{ minRows: 2, maxRows: 3 }}
+          style={{ fontSize: 12 }}
+        />
+      </Modal>
+    </>
   );
 }
 
@@ -501,15 +528,19 @@ function AdjustStyleButton({ platform, loading, onRegenerate }) {
 export default function BulkSchedule() {
   const [rows, setRows] = useState([createEmptyRow()]);
   const [publishing, setPublishing] = useState(false);
+  const [published, setPublished] = useState(false);
 
   const updateRow = (id, updates) => {
     setRows(prev => prev.map(r => r.id === id ? { ...r, ...updates } : r));
   };
 
-  const addRow = () => setRows(prev => {
-    const lastMerchant = prev[prev.length - 1]?.merchant || null;
-    return [...prev, { ...createEmptyRow(), merchant: lastMerchant }];
-  });
+  const addRow = () => {
+    setPublished(false);
+    setRows(prev => {
+      const lastMerchant = prev[prev.length - 1]?.merchant || null;
+      return [...prev, { ...createEmptyRow(), merchant: lastMerchant }];
+    });
+  };
 
   const removeRow = (id) => {
     setRows(prev => prev.length <= 1 ? prev : prev.filter(r => r.id !== id));
@@ -548,9 +579,14 @@ export default function BulkSchedule() {
   };
 
   const updateCaption = (id, platform, value) => {
-    setRows(prev => prev.map(r =>
-      r.id === id ? { ...r, captions: { ...r.captions, [platform]: value } } : r
-    ));
+    setRows(prev => prev.map(r => {
+      if (r.id !== id) return r;
+      const updated = { ...r.captions, [platform]: value };
+      // Sync Facebook and Instagram captions
+      if (platform === 'facebook') updated.instagram = value;
+      if (platform === 'instagram') updated.facebook = value;
+      return { ...r, captions: updated };
+    }));
   };
 
   /* ── AI Generate for a single row ──────────────── */
@@ -572,15 +608,30 @@ export default function BulkSchedule() {
 
     updateRow(row.id, { generating: true });
     try {
+      // Generate captions for all platforms except Google (Google defaults to empty/photo-only)
+      const captionPlatforms = row.platforms.filter(p => p !== 'google');
+      if (captionPlatforms.length === 0) {
+        message.info('Google captions are not auto-generated. Type one manually or use Regenerate.');
+        updateRow(row.id, { generating: false });
+        return;
+      }
+      // FB and IG share the same caption — only generate for one, then copy
+      const genPlatforms = captionPlatforms.includes('facebook') ? ['facebook'] :
+                           captionPlatforms.includes('instagram') ? ['instagram'] : captionPlatforms;
       const result = await generateCaptions({
         mediaFiles: row.mediaFiles.map(f => f.filename),
         merchantName: row.merchant?.dbaName || row.merchant?.mid || '',
         merchantPhone: row.merchant?.phone || '',
         merchantAddress: row.merchant?.address || '',
         merchantWebsite: row.merchant?.website || '',
-        platforms: row.platforms,
+        platforms: genPlatforms,
         context: avoidContext,
       });
+      const sharedCaption = result.facebook || result.instagram || '';
+      if (sharedCaption) {
+        result.facebook = sharedCaption;
+        result.instagram = sharedCaption;
+      }
       updateRow(row.id, { captions: { ...row.captions, ...result }, generating: false });
     } catch (err) {
       message.error('AI generation failed');
@@ -602,8 +653,12 @@ export default function BulkSchedule() {
         merchantWebsite: row.merchant?.website || '',
         mediaFiles: row.mediaFiles.map(f => f.filename),
       });
+      // Sync FB and IG captions
+      const updated = { [platform]: result.caption };
+      if (platform === 'facebook') updated.instagram = result.caption;
+      if (platform === 'instagram') updated.facebook = result.caption;
       updateRow(row.id, {
-        captions: { ...row.captions, [platform]: result.caption },
+        captions: { ...row.captions, ...updated },
         regeneratingPlatform: null,
       });
     } catch {
@@ -693,6 +748,7 @@ export default function BulkSchedule() {
     }
 
     setPublishing(false);
+    setPublished(true);
     if (successCount > 0) message.success(`${successCount} post(s) submitted!`);
   };
 
@@ -717,6 +773,7 @@ export default function BulkSchedule() {
         background: '#F8FAFC', borderRadius: '10px 10px 0 0',
         border: '1px solid #E2E8F0', borderBottom: 'none',
         fontWeight: 600, fontSize: 12, color: '#64748B',
+        minWidth: 750, overflowX: 'auto',
       }}>
         <div>#</div>
         <div>Post to</div>
@@ -728,7 +785,7 @@ export default function BulkSchedule() {
       </div>
 
       {/* ── Rows ── */}
-      <div style={{ border: '1px solid #E2E8F0', borderRadius: '0 0 10px 10px', overflow: 'hidden' }}>
+      <div style={{ border: '1px solid #E2E8F0', borderRadius: '0 0 10px 10px', overflowX: 'auto' }}>
         {rows.map((row, index) => (
           <div key={row.id} style={{
             borderBottom: index < rows.length - 1 ? '1px solid #F1F5F9' : 'none',
@@ -740,6 +797,7 @@ export default function BulkSchedule() {
               display: 'grid',
               gridTemplateColumns: '36px 180px 36px 160px 1fr auto 36px',
               gap: 10, padding: '12px', alignItems: 'start',
+              minWidth: 750,
             }}>
               {/* # */}
               <div style={{ paddingTop: 4, fontWeight: 600, color: '#94A3B8', fontSize: 13 }}>
@@ -810,7 +868,7 @@ export default function BulkSchedule() {
                           <span style={{ color: cfg.color, fontSize: 12 }}>{cfg.icon}</span>
                           <Text style={{ fontSize: 11, color: '#64748B' }}>{cfg.label}</Text>
                         </div>
-                        {hasCaption && (
+                        {(hasCaption || p === 'google') && (
                           <Space size={2}>
                             <Tooltip title="Regenerate">
                               <Button type="text" size="small"
@@ -846,7 +904,17 @@ export default function BulkSchedule() {
                   mode={row.scheduleMode}
                   date={row.scheduleDate}
                   time={row.scheduleTime}
-                  onModeChange={(m) => updateRow(row.id, { scheduleMode: m })}
+                  onModeChange={(m) => {
+                    const updates = { scheduleMode: m };
+                    // Default to tomorrow at 10 AM when switching to schedule mode
+                    if (m === 'schedule' && !row.scheduleDate) {
+                      updates.scheduleDate = dayjs().add(1, 'day');
+                    }
+                    if (m === 'schedule' && !row.scheduleTime) {
+                      updates.scheduleTime = dayjs().hour(10).minute(0).second(0);
+                    }
+                    updateRow(row.id, updates);
+                  }}
                   onDateChange={(d) => updateRow(row.id, { scheduleDate: d })}
                   onTimeChange={(t) => updateRow(row.id, { scheduleTime: t })}
                 />
@@ -890,23 +958,21 @@ export default function BulkSchedule() {
       }}>
         <Button icon={<PlusOutlined />} onClick={addRow}>Add post</Button>
         <Space>
-          <Button size="large" onClick={() => setRows([createEmptyRow()])} disabled={publishing}>
+          <Button size="large" onClick={() => { setRows([createEmptyRow()]); setPublished(false); }} disabled={publishing}>
             Cancel
           </Button>
-          <Popconfirm
-            title={`${hasAnyScheduled ? 'Publish and schedule' : 'Publish'} ${validCount} post(s)?`}
-            description={hasAnyScheduled
-              ? 'Posts set to "Publish now" will publish immediately. Scheduled posts will be queued.'
-              : 'All posts will be published immediately.'}
-            onConfirm={handlePublishAll}
-            okText={hasAnyScheduled ? 'Publish and Schedule' : 'Publish'}
-            disabled={validCount === 0}
-          >
-            <Button type="primary" size="large" icon={<SendOutlined />}
-              loading={publishing} disabled={validCount === 0} style={{ minWidth: 160 }}>
-              {hasAnyScheduled ? 'Publish and schedule' : 'Publish'} ({validCount})
-            </Button>
-          </Popconfirm>
+          <Button type="primary" size="large"
+            icon={published ? <CheckCircleFilled /> : <SendOutlined />}
+            loading={publishing} disabled={published || validCount === 0}
+            style={{ minWidth: 160, ...(published ? { background: '#52c41a', borderColor: '#52c41a' } : {}) }}
+            onClick={() => {
+              const msg = hasAnyScheduled
+                ? `Publish and schedule ${validCount} post(s)? Posts set to "Publish now" will publish immediately. Scheduled posts will be queued.`
+                : `Publish ${validCount} post(s) immediately?`;
+              if (window.confirm(msg)) handlePublishAll();
+            }}>
+            {published ? 'Published!' : (hasAnyScheduled ? 'Publish and schedule' : 'Publish') + ` (${validCount})`}
+          </Button>
         </Space>
       </div>
     </div>

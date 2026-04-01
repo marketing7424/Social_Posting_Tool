@@ -8,9 +8,8 @@ import {
   UserOutlined,
   CloudUploadOutlined,
   SendOutlined,
-  BarChartOutlined,
 } from '@ant-design/icons';
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useMemo } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 
 const CreatePost = lazy(() => import('./pages/CreatePost'));
@@ -18,7 +17,7 @@ const ManagePosts = lazy(() => import('./pages/ManagePosts'));
 const BulkSchedule = lazy(() => import('./pages/BulkSchedule'));
 const Clients = lazy(() => import('./pages/Clients'));
 const MerchantSettings = lazy(() => import('./pages/MerchantSettings'));
-const Analytics = lazy(() => import('./pages/Analytics'));
+const Users = lazy(() => import('./pages/Users'));
 const Login = lazy(() => import('./pages/Login'));
 
 const { Header, Content, Sider } = Layout;
@@ -30,16 +29,8 @@ const PAGE_TITLES = {
   '/bulk': 'Bulk Schedule',
   '/posts': 'Manage Posts',
   '/clients': 'Clients',
-  '/analytics': 'Analytics',
+  '/users': 'Users',
 };
-
-const menuItems = [
-  { key: '/create', icon: <PlusCircleOutlined />, label: <NavLink to="/create">Create Post</NavLink> },
-  { key: '/bulk', icon: <CloudUploadOutlined />, label: <NavLink to="/bulk">Bulk Schedule</NavLink> },
-  { key: '/posts', icon: <UnorderedListOutlined />, label: <NavLink to="/posts">Manage Posts</NavLink> },
-  { key: '/clients', icon: <TeamOutlined />, label: <NavLink to="/clients">Clients</NavLink> },
-  { key: '/analytics', icon: <BarChartOutlined />, label: <NavLink to="/analytics">Analytics</NavLink> },
-];
 
 function PageHeader({ user, logout }) {
   const location = useLocation();
@@ -92,6 +83,19 @@ function PageHeader({ user, logout }) {
 function AppLayout() {
   const { user, loading, logout } = useAuth();
 
+  const menuItems = useMemo(() => {
+    const items = [
+      { key: '/create', icon: <PlusCircleOutlined />, label: <NavLink to="/create">Create Post</NavLink> },
+      { key: '/bulk', icon: <CloudUploadOutlined />, label: <NavLink to="/bulk">Bulk Schedule</NavLink> },
+      { key: '/posts', icon: <UnorderedListOutlined />, label: <NavLink to="/posts">Manage Posts</NavLink> },
+      { key: '/clients', icon: <TeamOutlined />, label: <NavLink to="/clients">Clients</NavLink> },
+    ];
+    if (user?.role === 'admin') {
+      items.push({ key: '/users', icon: <UserOutlined />, label: <NavLink to="/users">Users</NavLink> });
+    }
+    return items;
+  }, [user?.role]);
+
   if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: '#F1F5F9' }}>
@@ -118,7 +122,7 @@ function AppLayout() {
         breakpoint="lg"
         collapsedWidth="60"
         width={240}
-        style={{ borderRight: '1px solid rgba(255,255,255,0.06)' }}
+        style={{ borderRight: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column' }}
       >
         {/* Sidebar branding */}
         <div style={{
@@ -152,6 +156,31 @@ function AppLayout() {
         }} />
 
         <Menu theme="dark" mode="inline" items={menuItems} />
+
+        {/* Sign Out at bottom of sidebar */}
+        <div style={{ marginTop: 'auto', padding: '16px' }}>
+          <div style={{
+            borderTop: '1px solid rgba(255,255,255,0.08)',
+            paddingTop: 12,
+          }}>
+            <Button
+              type="text"
+              icon={<LogoutOutlined />}
+              onClick={logout}
+              block
+              style={{
+                color: 'rgba(255,255,255,0.65)',
+                textAlign: 'left',
+                height: 40,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              Sign Out
+            </Button>
+          </div>
+        </div>
       </Sider>
 
       <Layout>
@@ -175,8 +204,10 @@ function AppLayout() {
               <Route path="/posts" element={<ManagePosts />} />
               <Route path="/bulk" element={<BulkSchedule />} />
               <Route path="/clients" element={<Clients />} />
-              <Route path="/analytics" element={<Analytics />} />
               <Route path="/settings/:id" element={<MerchantSettings />} />
+              {user?.role === 'admin' && (
+                <Route path="/users" element={<Users />} />
+              )}
               <Route path="*" element={<Navigate to="/create" replace />} />
             </Routes>
           </Suspense>

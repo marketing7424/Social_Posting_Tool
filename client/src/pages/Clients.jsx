@@ -9,6 +9,7 @@ import {
   message,
   Popconfirm,
   Typography,
+  Tooltip,
 } from 'antd';
 import {
   PlusOutlined,
@@ -18,6 +19,7 @@ import {
   SearchOutlined,
   CheckCircleFilled,
   CloseCircleFilled,
+  WarningFilled,
   FacebookFilled,
   InstagramFilled,
   GoogleOutlined,
@@ -29,6 +31,7 @@ import {
   updateMerchant,
   deleteMerchant,
 } from '../api/client';
+import PhoneInput from '../components/merchants/PhoneInput';
 
 const { Title } = Typography;
 
@@ -38,18 +41,39 @@ const PLATFORM_ICONS = {
   google: { icon: <GoogleOutlined />, color: '#EA580C', label: 'Google' },
 };
 
-const platformDot = (connected, platformKey) => {
+function getTokenAgeDays(tokenCreatedAt) {
+  if (!tokenCreatedAt) return null;
+  const created = new Date(tokenCreatedAt);
+  if (isNaN(created)) return null;
+  return Math.floor((Date.now() - created.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+const platformDot = (connected, platformKey, tokenCreatedAt) => {
   const cfg = PLATFORM_ICONS[platformKey];
+  const ageDays = getTokenAgeDays(tokenCreatedAt);
+  // Meta tokens expire after 60 days; warn at 50+
+  const isExpiring = platformKey !== 'google' && connected && ageDays !== null && ageDays >= 50;
+  const isExpired = platformKey !== 'google' && connected && ageDays !== null && ageDays >= 60;
+  const statusIcon = !connected ? (
+    <CloseCircleFilled style={{ color: '#ff4d4f', fontSize: 11 }} />
+  ) : isExpired ? (
+    <Tooltip title={`Token expired (${ageDays} days old) — reconnect now`}>
+      <WarningFilled style={{ color: '#ff4d4f', fontSize: 11 }} />
+    </Tooltip>
+  ) : isExpiring ? (
+    <Tooltip title={`Token expires soon (${ageDays}/60 days) — reconnect soon`}>
+      <WarningFilled style={{ color: '#faad14', fontSize: 11 }} />
+    </Tooltip>
+  ) : (
+    <CheckCircleFilled style={{ color: '#52c41a', fontSize: 11 }} />
+  );
+
   return (
     <Space size={4}>
       <span style={{ color: connected ? cfg.color : '#d1d5db', fontSize: 16, display: 'flex' }}>
         {cfg.icon}
       </span>
-      {connected ? (
-        <CheckCircleFilled style={{ color: '#52c41a', fontSize: 11 }} />
-      ) : (
-        <CloseCircleFilled style={{ color: '#ff4d4f', fontSize: 11 }} />
-      )}
+      {statusIcon}
     </Space>
   );
 };
@@ -168,6 +192,12 @@ export default function Clients() {
       dataIndex: 'phone',
       key: 'phone',
       responsive: ['md'],
+      render: (text) => {
+        if (!text) return '';
+        const d = text.replace(/\D/g, '').slice(0, 10);
+        if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+        return text;
+      },
     },
     {
       title: 'Website',
@@ -181,9 +211,9 @@ export default function Clients() {
       key: 'platforms',
       render: (_, record) => (
         <Space size="middle">
-          {platformDot(!!record.fbPageId, 'facebook')}
-          {platformDot(!!record.igUserId, 'instagram')}
-          {platformDot(!!record.googleToken, 'google')}
+          {platformDot(!!record.fbPageId, 'facebook', record.fbTokenCreatedAt)}
+          {platformDot(!!record.igUserId, 'instagram', record.fbTokenCreatedAt)}
+          {platformDot(!!record.googleToken, 'google', record.googleTokenCreatedAt)}
         </Space>
       ),
     },
@@ -280,7 +310,7 @@ export default function Clients() {
             <Input placeholder="Street address" />
           </Form.Item>
           <Form.Item name="phone" label="Phone">
-            <Input placeholder="(555) 555-5555" />
+            <PhoneInput />
           </Form.Item>
           <Form.Item name="website" label="Website">
             <Input placeholder="https://www.example.com" />

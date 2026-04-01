@@ -3,9 +3,14 @@ const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
 const FormData = require('form-data');
+const { google } = require('googleapis');
 
 const META_API = 'https://graph.facebook.com/v21.0';
 const GOOGLE_API = 'https://mybusiness.googleapis.com/v4';
+
+const UPLOADS_DIR = process.env.NODE_ENV === 'production'
+  ? '/data/uploads'
+  : path.join(__dirname, '..', '..', 'uploads');
 
 async function withRetry(fn, retries = 1) {
   for (let i = 0; i <= retries; i++) {
@@ -140,7 +145,7 @@ async function publishToFacebook({ pageId, accessToken, caption, mediaFiles, lay
   return withRetry(async () => {
     // Video post — upload via Facebook Reels API (3-step resumable upload)
     if (videoFile) {
-      const filePath = path.join(__dirname, '..', '..', 'uploads', videoFile);
+      const filePath = path.join(UPLOADS_DIR, videoFile);
       if (!fs.existsSync(filePath)) {
         throw new Error(`Video file not found: ${videoFile}`);
       }
@@ -193,7 +198,7 @@ async function publishToFacebook({ pageId, accessToken, caption, mediaFiles, lay
 
     // Single image
     if (mediaFiles.length === 1) {
-      const filePath = path.join(__dirname, '..', '..', 'uploads', mediaFiles[0]);
+      const filePath = path.join(UPLOADS_DIR, mediaFiles[0]);
       const form = buildUploadForm(filePath, accessToken, { message: caption });
 
       const resp = await axios.post(`${META_API}/${pageId}/photos`, form, {
@@ -222,7 +227,7 @@ async function publishToFacebook({ pageId, accessToken, caption, mediaFiles, lay
       const albumId = albumResp.data.id;
 
       await Promise.all(mediaFiles.map(async (file) => {
-        const filePath = path.join(__dirname, '..', '..', 'uploads', file);
+        const filePath = path.join(UPLOADS_DIR, file);
         const form = buildUploadForm(filePath, accessToken);
         await axios.post(`${META_API}/${albumId}/photos`, form, {
           headers: form.getHeaders(),
@@ -238,7 +243,7 @@ async function publishToFacebook({ pageId, accessToken, caption, mediaFiles, lay
 
     // Upload all photos in parallel (hero gets cropped, others stay original)
     const photoIds = await Promise.all(mediaFiles.map(async (file, i) => {
-      const filePath = path.join(__dirname, '..', '..', 'uploads', file);
+      const filePath = path.join(UPLOADS_DIR, file);
 
       let form;
       if (i === 0) {
@@ -318,13 +323,58 @@ async function waitForIgContainer(containerId, accessToken) {
   throw new Error('Instagram media processing timed out');
 }
 
+/**
+ * Ensure an image meets Instagram aspect ratio requirements (4:5 to 1.91:1).
+ * If outside range, crop to the nearest valid ratio. Returns the original path
+ * if already valid, or a temporary file path with the cropped image.
+ */
+async function ensureInstagramAspectRatio(filePath) {
+  try {
+    const metadata = await sharp(filePath).metadata();
+    const { width, height } = metadata;
+    if (!width || !height) return filePath;
+
+    const ratio = width / height;
+    const MIN_RATIO = 4 / 5;   // 0.8 (portrait)
+    const MAX_RATIO = 1.91;     // landscape
+
+    if (ratio >= MIN_RATIO && ratio <= MAX_RATIO) return filePath; // already valid
+
+    let cropW = width;
+    let cropH = height;
+
+    if (ratio < MIN_RATIO) {
+      // Too tall — crop height to 4:5
+      cropH = Math.round(width / MIN_RATIO);
+    } else {
+      // Too wide — crop width to 1.91:1
+      cropW = Math.round(height * MAX_RATIO);
+    }
+
+    const left = Math.round((width - cropW) / 2);
+    const top = Math.round((height - cropH) / 2);
+
+    const tmpPath = filePath.replace(/(\.\w+)$/, '_igcrop$1');
+    await sharp(filePath)
+      .extract({ left, top, width: cropW, height: cropH })
+      .jpeg({ quality: 92 })
+      .toFile(tmpPath);
+
+    console.log(`[publisher] Auto-cropped for IG: ${width}x${height} (${ratio.toFixed(2)}) → ${cropW}x${cropH}`);
+    return tmpPath;
+  } catch (err) {
+    console.error('[publisher] IG aspect ratio crop failed, using original:', err.message);
+    return filePath;
+  }
+}
+
 async function publishToInstagram({ igUserId, accessToken, caption, mediaFiles, videoFile, fbPageId, fbImageUrls }) {
   if (!igUserId || !accessToken) throw new Error('Instagram credentials not configured');
 
   return withRetry(async () => {
     // Video post — publish as Instagram Reel using resumable upload
     if (videoFile) {
-      const filePath = path.join(__dirname, '..', '..', 'uploads', videoFile);
+      const filePath = path.join(UPLOADS_DIR, videoFile);
       if (!fs.existsSync(filePath)) {
         throw new Error(`Video file not found: ${videoFile}`);
       }
@@ -386,10 +436,16 @@ async function publishToInstagram({ igUserId, accessToken, caption, mediaFiles, 
     }
 
     if (mediaFiles.length === 1) {
-      // Reuse Facebook CDN URL if available, otherwise upload temporarily
-      const imageUrl = (fbImageUrls && fbImageUrls[0])
-        ? fbImageUrls[0]
-        : await getPublicImageUrl(fbPageId, accessToken, path.join(__dirname, '..', '..', 'uploads', mediaFiles[0]));
+      // Reuse Facebook CDN URL if available, otherwise upload with aspect ratio fix
+      let imageUrl;
+      if (fbImageUrls && fbImageUrls[0]) {
+        imageUrl = fbImageUrls[0];
+      } else {
+        const originalPath = path.join(UPLOADS_DIR, mediaFiles[0]);
+        const croppedPath = await ensureInstagramAspectRatio(originalPath);
+        imageUrl = await getPublicImageUrl(fbPageId, accessToken, croppedPath);
+        if (croppedPath !== originalPath) try { fs.unlinkSync(croppedPath); } catch (_) {}
+      }
 
       const createResp = await axios.post(`${META_API}/${igUserId}/media`, {
         image_url: imageUrl,
@@ -412,8 +468,11 @@ async function publishToInstagram({ igUserId, accessToken, caption, mediaFiles, 
       imageUrls = fbImageUrls;
     } else {
       imageUrls = await Promise.all(mediaFiles.slice(0, 10).map(async (file) => {
-        const filePath = path.join(__dirname, '..', '..', 'uploads', file);
-        return getPublicImageUrl(fbPageId, accessToken, filePath);
+        const originalPath = path.join(UPLOADS_DIR, file);
+        const croppedPath = await ensureInstagramAspectRatio(originalPath);
+        const url = await getPublicImageUrl(fbPageId, accessToken, croppedPath);
+        if (croppedPath !== originalPath) try { fs.unlinkSync(croppedPath); } catch (_) {}
+        return url;
       }));
     }
 
@@ -450,31 +509,75 @@ async function publishToInstagram({ igUserId, accessToken, caption, mediaFiles, 
   });
 }
 
+async function getGoogleAccessToken(refreshToken) {
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET
+  );
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+  const { token } = await oauth2Client.getAccessToken();
+  if (!token) throw new Error('Failed to get Google access token from refresh token');
+  return token;
+}
+
 async function publishToGoogle({ accessToken, locationId, caption, mediaFiles }) {
   if (!accessToken || !locationId) throw new Error('Google Business credentials not configured');
 
-  return withRetry(async () => {
-    const body = {
-      languageCode: 'en',
-      summary: caption,
-      topicType: 'STANDARD',
-    };
+  const token = await getGoogleAccessToken(accessToken);
+  const baseUrl = process.env.BASE_URL || 'http://localhost:3001';
+  const headers = { Authorization: `Bearer ${token}` };
+  const hasCaption = caption && caption.trim().length > 0;
+  const hasMedia = mediaFiles && mediaFiles.length > 0;
 
-    if (mediaFiles && mediaFiles.length > 0) {
-      const baseUrl = process.env.BASE_URL || 'http://localhost:3001';
-      body.media = {
-        mediaFormat: 'PHOTO',
-        sourceUrl: `${baseUrl}/uploads/${mediaFiles[0]}`,
+  // If there's a caption → create a local post (appears in Updates/Posts section)
+  if (hasCaption) {
+    return withRetry(async () => {
+      const body = {
+        languageCode: 'en',
+        summary: caption,
+        topicType: 'STANDARD',
       };
-    }
+      if (hasMedia) {
+        body.media = {
+          mediaFormat: 'PHOTO',
+          sourceUrl: `${baseUrl}/uploads/${mediaFiles[0]}`,
+        };
+      }
+      console.log('[google] Creating local post for', locationId);
+      const resp = await axios.post(
+        `${GOOGLE_API}/${locationId}/localPosts`,
+        body,
+        { headers }
+      );
+      console.log('[google] Local post created:', resp.data.name);
+      return { postId: resp.data.name };
+    });
+  }
 
-    const resp = await axios.post(
-      `${GOOGLE_API}/${locationId}/localPosts`,
-      body,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    return { postId: resp.data.name };
-  });
+  // If no caption but has photos → upload to business photos
+  if (hasMedia) {
+    const postIds = [];
+    for (const file of mediaFiles) {
+      await withRetry(async () => {
+        const body = {
+          mediaFormat: 'PHOTO',
+          locationAssociation: { category: 'ADDITIONAL' },
+          sourceUrl: `${baseUrl}/uploads/${file}`,
+        };
+        console.log('[google] Uploading photo for', locationId, ':', file);
+        const resp = await axios.post(
+          `${GOOGLE_API}/${locationId}/media`,
+          body,
+          { headers }
+        );
+        console.log('[google] Photo uploaded:', resp.data.name);
+        postIds.push(resp.data.name);
+      });
+    }
+    return { postId: postIds.join(',') };
+  }
+
+  throw new Error('Nothing to publish — no caption or media provided');
 }
 
 module.exports = { publishToFacebook, publishToInstagram, publishToGoogle };

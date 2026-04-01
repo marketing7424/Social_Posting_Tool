@@ -60,7 +60,10 @@ export default function MerchantSettings() {
   const [selectingPageId, setSelectingPageId] = useState(null);
   const [locationPickerOpen, setLocationPickerOpen] = useState(false);
   const [availableLocations, setAvailableLocations] = useState([]);
+  const [locationSearch, setLocationSearch] = useState('');
   const [selectingLocation, setSelectingLocation] = useState(false);
+  const [disconnectPlatform, setDisconnectPlatform] = useState(null);
+  const [disconnecting, setDisconnecting] = useState(false);
 
   // Handle OAuth redirect query params
   useEffect(() => {
@@ -161,30 +164,38 @@ export default function MerchantSettings() {
   };
 
   const handleDisconnect = (platform) => {
+    setDisconnectPlatform(platform);
+  };
+
+  const confirmDisconnect = async () => {
+    const platform = disconnectPlatform;
     const fieldsToClear = {
       facebook: { fbPageId: '', fbToken: '', fbPageName: '', igUserId: '', igToken: '', igUsername: '' },
       instagram: { igUserId: '', igToken: '', igUsername: '' },
       google: { googleToken: '', googleLocationId: '', googleLocationName: '' },
     };
-    Modal.confirm({
-      title: `Disconnect ${platform}?`,
-      content: platform === 'facebook'
-        ? 'This will also disconnect Instagram since it uses the same Facebook token.'
-        : `This will remove the ${platform} credentials for this merchant.`,
-      okText: 'Disconnect',
-      okButtonProps: { danger: true },
-      onOk: async () => {
-        try {
-          const updated = await updateMerchant(mid, fieldsToClear[platform]);
-          setMerchant(updated);
-          form.setFieldsValue(fieldsToClear[platform]);
-          setTestResults(null);
-          message.success(`${platform} disconnected`);
-        } catch {
-          message.error(`Failed to disconnect ${platform}`);
-        }
-      },
-    });
+    setDisconnecting(true);
+    try {
+      await updateMerchant(mid, fieldsToClear[platform]);
+      const fresh = await getMerchant(mid);
+      setMerchant(fresh);
+      form.setFieldsValue({
+        fbPageId: fresh.fbPageId || '',
+        fbToken: fresh.fbToken || '',
+        igUserId: fresh.igUserId || '',
+        igToken: fresh.igToken || '',
+        googleToken: fresh.googleToken || '',
+        googleLocationId: fresh.googleLocationId || '',
+      });
+      setTestResults(null);
+      message.success(`${platform} disconnected`);
+    } catch (err) {
+      console.error('Disconnect error:', err);
+      message.error(`Failed to disconnect ${platform}: ${err.response?.data?.error || err.message}`);
+    } finally {
+      setDisconnecting(false);
+      setDisconnectPlatform(null);
+    }
   };
 
   // Load merchant data
@@ -561,13 +572,20 @@ export default function MerchantSettings() {
           </Space>
         }
         open={locationPickerOpen}
-        onCancel={() => setLocationPickerOpen(false)}
+        onCancel={() => { setLocationPickerOpen(false); setLocationSearch(''); }}
         footer={null}
         width={560}
       >
-        <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+        <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
           Choose which location to connect for this merchant:
         </Text>
+        <Input.Search
+          placeholder="Search locations..."
+          value={locationSearch}
+          onChange={(e) => setLocationSearch(e.target.value)}
+          allowClear
+          style={{ marginBottom: 16 }}
+        />
         {availableLocations.length === 0 ? (
           <Alert
             type="warning"
@@ -577,7 +595,11 @@ export default function MerchantSettings() {
           />
         ) : (
           <List
-            dataSource={availableLocations}
+            dataSource={availableLocations.filter((loc) => {
+              if (!locationSearch) return true;
+              const q = locationSearch.toLowerCase();
+              return (loc.title || '').toLowerCase().includes(q) || (loc.address || '').toLowerCase().includes(q);
+            })}
             renderItem={(loc) => (
               <List.Item
                 actions={[
@@ -613,6 +635,20 @@ export default function MerchantSettings() {
             )}
           />
         )}
+      </Modal>
+
+      <Modal
+        title={`Disconnect ${disconnectPlatform}?`}
+        open={!!disconnectPlatform}
+        onCancel={() => setDisconnectPlatform(null)}
+        onOk={confirmDisconnect}
+        okText="Disconnect"
+        okButtonProps={{ danger: true, loading: disconnecting }}
+        cancelButtonProps={{ disabled: disconnecting }}
+      >
+        {disconnectPlatform === 'facebook'
+          ? 'This will also disconnect Instagram since it uses the same Facebook token.'
+          : `This will remove the ${disconnectPlatform} credentials for this merchant.`}
       </Modal>
     </div>
   );

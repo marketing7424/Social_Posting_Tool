@@ -45,7 +45,11 @@ export default function CaptionEditor({
 
   const handleChange = (platform, value) => {
     if (onCaptionsChange) {
-      onCaptionsChange({ ...captions, [platform]: value });
+      const updated = { ...captions, [platform]: value };
+      // Sync Facebook and Instagram captions
+      if (platform === 'facebook') updated.instagram = value;
+      if (platform === 'instagram') updated.facebook = value;
+      onCaptionsChange(updated);
     }
   };
 
@@ -152,7 +156,7 @@ export default function CaptionEditor({
                     icon={<ReloadOutlined />}
                     onClick={() => handleRegenerate(platform)}
                     loading={isRegenerating}
-                    disabled={!captions[platform]?.trim()}
+                    disabled={platform !== 'google' && !captions[platform]?.trim()}
                   >
                     Regenerate
                   </Button>
@@ -170,7 +174,7 @@ export default function CaptionEditor({
                     <Button
                       size="small"
                       icon={<EditOutlined />}
-                      disabled={!captions[platform]?.trim()}
+                      disabled={platform !== 'google' && !captions[platform]?.trim()}
                     >
                       Adjust Style
                     </Button>

@@ -29,9 +29,26 @@ function getDb() {
       "ALTER TABLE merchants ADD COLUMN google_location_name TEXT DEFAULT ''",
       "ALTER TABLE posts ADD COLUMN fb_layout_variant INTEGER DEFAULT 0",
       "ALTER TABLE merchants ADD COLUMN website TEXT DEFAULT ''",
+      "ALTER TABLE posts ADD COLUMN previous_status TEXT DEFAULT ''",
+      "ALTER TABLE post_platforms ADD COLUMN published_at TEXT DEFAULT ''",
+      "ALTER TABLE merchants ADD COLUMN timezone TEXT DEFAULT ''",
+      "ALTER TABLE merchants ADD COLUMN fb_token_created_at TEXT DEFAULT ''",
+      "ALTER TABLE merchants ADD COLUMN google_token_created_at TEXT DEFAULT ''",
+      "ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'",
     ];
     for (const sql of migrations) {
       try { db.exec(sql); } catch (_) { /* column already exists */ }
+    }
+
+    // Ensure admin emails have admin role
+    const adminEmails = [
+      'marketing@richpaymentsolutions.com',
+      'hoang.tran@richpaymentsolutions.com',
+    ];
+    for (const email of adminEmails) {
+      try {
+        db.prepare("UPDATE users SET role = 'admin' WHERE email = ? AND (role IS NULL OR role != 'admin')").run(email);
+      } catch (_) {}
     }
   }
   return db;

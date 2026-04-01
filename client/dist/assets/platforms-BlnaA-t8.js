@@ -1,1 +1,0 @@
-const o={facebook:"#1D4ED8",instagram:"#EAB308",google:"#EA580C"},a={facebook:"blue",instagram:"gold",google:"orange"},g={facebook:"Facebook",instagram:"Instagram",google:"Google Business"};export{o as P,g as a,a as b};
