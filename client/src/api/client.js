@@ -57,6 +57,7 @@ export const getPosts = (filters = {}) => {
   return api.get(`/posts?${params}`).then(r => r.data);
 };
 export const getPost = (id) => api.get(`/posts/${id}`).then(r => r.data);
+export const getPostCreators = () => api.get('/posts/creators').then(r => r.data);
 export const createPost = (data) => api.post('/posts', data).then(r => r.data);
 export const updatePost = (id, data) => api.patch(`/posts/${id}`, data).then(r => r.data);
 export const deletePost = (id) => api.delete(`/posts/${id}`).then(r => r.data);

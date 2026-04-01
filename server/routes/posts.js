@@ -65,7 +65,7 @@ router.post('/', (req, res) => {
 // GET /api/posts
 router.get('/', (req, res) => {
   const db = getDb();
-  const { merchant, platform, status, created_by, exclude_statuses, date_from, date_to, limit = 50, offset = 0 } = req.query;
+  const { merchant, platform, status, created_by, exclude_statuses, date_from, date_to, limit = 500, offset = 0 } = req.query;
 
   let sql = 'SELECT * FROM posts WHERE 1=1';
   const params = [];
@@ -103,6 +103,20 @@ router.get('/', (req, res) => {
   // Filter out posts that have no matching platform if platform filter is set
   const filtered = platform ? result.filter(r => r.platforms.length > 0) : result;
   res.json(filtered);
+});
+
+// GET /api/posts/creators — unique users who have created posts
+router.get('/creators', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare(
+    `SELECT DISTINCT p.created_by, u.display_name, u.email
+     FROM posts p JOIN users u ON p.created_by = u.id
+     WHERE p.created_by IS NOT NULL`
+  ).all();
+  res.json(rows.map(r => ({
+    value: r.created_by,
+    label: r.display_name || r.email,
+  })));
 });
 
 // GET /api/posts/:id

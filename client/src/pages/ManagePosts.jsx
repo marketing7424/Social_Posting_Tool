@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Table,
   Tag,
@@ -34,6 +34,7 @@ import utc from 'dayjs/plugin/utc';
 dayjs.extend(utc);
 import {
   getPosts,
+  getPostCreators,
   searchMerchants,
   updatePost,
   deletePost,
@@ -143,15 +144,9 @@ export default function ManagePosts() {
   const [repostPlatforms, setRepostPlatforms] = useState([]);
 
   // Unique creators for "Posted by" filter
-  const uniqueCreators = useMemo(() => {
-    const map = new Map();
-    posts.forEach(p => {
-      if (p.created_by && p.created_by_name) map.set(p.created_by, p.created_by_name);
-    });
-    return Array.from(map, ([id, name]) => ({ value: id, label: name }));
-  }, [posts]);
+  const [creators, setCreators] = useState([]);
 
-  // Load merchants for filter dropdown
+  // Load merchants and creators for filter dropdowns
   useEffect(() => {
     searchMerchants()
       .then((data) => {
@@ -159,6 +154,9 @@ export default function ManagePosts() {
         setMerchants(list);
       })
       .catch(() => message.error('Failed to load merchants'));
+    getPostCreators()
+      .then((data) => setCreators(Array.isArray(data) ? data : []))
+      .catch(() => {});
   }, []);
 
   // Fetch posts with current filters
@@ -717,7 +715,7 @@ export default function ManagePosts() {
               style={{ width: '100%', height: 36, borderRadius: 8, border: '1px solid #d9d9d9', padding: '0 8px', fontSize: 14 }}
             >
               <option value="">All Users</option>
-              {uniqueCreators.map((o) => (
+              {creators.map((o) => (
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
             </select>
