@@ -7,7 +7,7 @@ import {
   PlusOutlined, DeleteOutlined, SendOutlined, ClockCircleOutlined,
   LoadingOutlined, CheckCircleFilled, CloseCircleFilled,
   FacebookFilled, InstagramFilled, GoogleOutlined,
-  ThunderboltOutlined, PlayCircleFilled, ReloadOutlined, EditOutlined, EyeOutlined, EyeInvisibleOutlined,
+  ThunderboltOutlined, PlayCircleFilled, ReloadOutlined, EditOutlined, EyeOutlined, EyeInvisibleOutlined, CopyOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import {
@@ -546,6 +546,29 @@ export default function BulkSchedule() {
     setRows(prev => prev.length <= 1 ? prev : prev.filter(r => r.id !== id));
   };
 
+  const duplicateRow = (id) => {
+    setPublished(false);
+    setRows(prev => {
+      const source = prev.find(r => r.id === id);
+      if (!source) return prev;
+      const idx = prev.indexOf(source);
+      const copy = {
+        ...source,
+        id: Date.now() + Math.random(),
+        generating: false,
+        regeneratingPlatform: null,
+        publishing: false,
+        result: null,
+        captions: { ...source.captions },
+        platforms: [...source.platforms],
+        mediaFiles: [...source.mediaFiles],
+      };
+      const next = [...prev];
+      next.splice(idx + 1, 0, copy);
+      return next;
+    });
+  };
+
   const addMedia = (id, files) => {
     setRows(prev => prev.map(r => {
       if (r.id !== id) return r;
@@ -920,8 +943,12 @@ export default function BulkSchedule() {
                 />
               </div>
 
-              {/* Delete */}
-              <div style={{ paddingTop: 2 }}>
+              {/* Duplicate & Delete */}
+              <div style={{ paddingTop: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <Tooltip title="Duplicate post">
+                  <Button type="text" icon={<CopyOutlined />} size="small"
+                    onClick={() => duplicateRow(row.id)} />
+                </Tooltip>
                 <Button type="text" danger icon={<DeleteOutlined />} size="small"
                   onClick={() => removeRow(row.id)} disabled={rows.length <= 1} />
               </div>
