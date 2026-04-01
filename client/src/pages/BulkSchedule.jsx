@@ -1,13 +1,13 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   Button, Space, message, Typography, Input, Upload,
-  Tag, Tooltip, Divider, Modal,
+  Tag, Tooltip, Divider, Modal, Checkbox,
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, SendOutlined, ClockCircleOutlined,
   LoadingOutlined, CheckCircleFilled, CloseCircleFilled,
   FacebookFilled, InstagramFilled, GoogleOutlined,
-  ThunderboltOutlined, PlayCircleFilled, ReloadOutlined, EditOutlined, EyeOutlined, EyeInvisibleOutlined, CopyOutlined,
+  ThunderboltOutlined, PlayCircleFilled, ReloadOutlined, EditOutlined, EyeOutlined, EyeInvisibleOutlined, CopyOutlined, TeamOutlined, SearchOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import {
@@ -530,6 +530,67 @@ export default function BulkSchedule() {
   const [publishing, setPublishing] = useState(false);
   const [published, setPublished] = useState(false);
 
+  // Mass Publish state
+  const [massModalOpen, setMassModalOpen] = useState(false);
+  const [allMerchants, setAllMerchants] = useState([]);
+  const [massSelected, setMassSelected] = useState(new Set());
+  const [massSearch, setMassSearch] = useState('');
+  const [massPersistExclude, setMassPersistExclude] = useState(false);
+
+  // Load persisted excluded merchants from localStorage
+  const EXCLUDE_KEY = 'massPublishExcluded';
+  const getPersistedExcluded = () => {
+    try { return new Set(JSON.parse(localStorage.getItem(EXCLUDE_KEY) || '[]')); }
+    catch { return new Set(); }
+  };
+
+  const openMassPublish = async () => {
+    try {
+      const results = await searchMerchants('');
+      const list = Array.isArray(results) ? results : [];
+      setAllMerchants(list);
+      const excluded = getPersistedExcluded();
+      // Pre-check all except persisted excluded
+      setMassSelected(new Set(list.filter(m => !excluded.has(m.mid || m.id)).map(m => m.mid || m.id)));
+      setMassPersistExclude(false);
+      setMassSearch('');
+      setMassModalOpen(true);
+    } catch {
+      message.error('Failed to load merchants');
+    }
+  };
+
+  const handleMassPublishConfirm = () => {
+    // Save excluded merchants if flag is set
+    const allIds = allMerchants.map(m => m.mid || m.id);
+    const excluded = allIds.filter(id => !massSelected.has(id));
+    if (massPersistExclude) {
+      localStorage.setItem(EXCLUDE_KEY, JSON.stringify(excluded));
+    }
+
+    // Create one row per selected merchant, copying from the first row's content
+    const template = rows[0] || createEmptyRow();
+    const selectedMerchants = allMerchants.filter(m => massSelected.has(m.mid || m.id));
+    if (selectedMerchants.length === 0) {
+      message.warning('Select at least one store');
+      return;
+    }
+    const newRows = selectedMerchants.map(m => ({
+      ...createEmptyRow(),
+      merchant: m,
+      platforms: [...template.platforms],
+      captions: { ...template.captions },
+      mediaFiles: [...template.mediaFiles],
+      scheduleMode: template.scheduleMode,
+      scheduleDate: template.scheduleDate,
+      scheduleTime: template.scheduleTime,
+    }));
+    setRows(newRows);
+    setPublished(false);
+    setMassModalOpen(false);
+    message.success(`Created ${newRows.length} post(s) for selected stores`);
+  };
+
   const updateRow = (id, updates) => {
     setRows(prev => prev.map(r => r.id === id ? { ...r, ...updates } : r));
   };
@@ -989,7 +1050,10 @@ export default function BulkSchedule() {
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         marginTop: 16, padding: '16px 0', borderTop: '1px solid #E2E8F0',
       }}>
-        <Button icon={<PlusOutlined />} onClick={addRow}>Add post</Button>
+        <Space>
+          <Button icon={<PlusOutlined />} onClick={addRow}>Add post</Button>
+          <Button icon={<TeamOutlined />} onClick={openMassPublish}>Mass Publish</Button>
+        </Space>
         <Space>
           <Button size="large" onClick={() => { setRows([createEmptyRow()]); setPublished(false); }} disabled={publishing}>
             Cancel
@@ -1008,6 +1072,94 @@ export default function BulkSchedule() {
           </Button>
         </Space>
       </div>
+
+      {/* Mass Publish Modal */}
+      <Modal
+        title="Mass Publish — Select Stores"
+        open={massModalOpen}
+        onCancel={() => setMassModalOpen(false)}
+        onOk={handleMassPublishConfirm}
+        okText={`Create ${massSelected.size} Post(s)`}
+        okButtonProps={{ disabled: massSelected.size === 0 }}
+        width={520}
+        destroyOnClose
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            Select stores to create posts for. The first row's content (platforms, captions, media, schedule) will be copied to each store.
+          </Text>
+        </div>
+
+        <Input
+          prefix={<SearchOutlined style={{ color: '#94A3B8' }} />}
+          placeholder="Search stores..."
+          value={massSearch}
+          onChange={(e) => setMassSearch(e.target.value)}
+          allowClear
+          style={{ marginBottom: 12 }}
+        />
+
+        <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Checkbox
+            checked={massSelected.size === allMerchants.length}
+            indeterminate={massSelected.size > 0 && massSelected.size < allMerchants.length}
+            onChange={(e) => {
+              if (e.target.checked) {
+                setMassSelected(new Set(allMerchants.map(m => m.mid || m.id)));
+              } else {
+                setMassSelected(new Set());
+              }
+            }}
+          >
+            <Text strong style={{ fontSize: 13 }}>Select All ({massSelected.size}/{allMerchants.length})</Text>
+          </Checkbox>
+        </div>
+
+        <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid #E2E8F0', borderRadius: 8, padding: '4px 0' }}>
+          {allMerchants
+            .filter(m => {
+              if (!massSearch.trim()) return true;
+              const q = massSearch.toLowerCase();
+              return (m.dbaName || '').toLowerCase().includes(q)
+                || (m.dba_name || '').toLowerCase().includes(q)
+                || (m.mid || '').toLowerCase().includes(q)
+                || (m.name || '').toLowerCase().includes(q);
+            })
+            .map(m => {
+              const id = m.mid || m.id;
+              return (
+                <div key={id} style={{
+                  padding: '6px 12px', display: 'flex', alignItems: 'center',
+                  borderBottom: '1px solid #F1F5F9',
+                }}>
+                  <Checkbox
+                    checked={massSelected.has(id)}
+                    onChange={(e) => {
+                      setMassSelected(prev => {
+                        const next = new Set(prev);
+                        e.target.checked ? next.add(id) : next.delete(id);
+                        return next;
+                      });
+                    }}
+                  >
+                    <Text style={{ fontSize: 13 }}>{m.dbaName || m.dba_name || m.name || id}</Text>
+                    {m.mid && <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{m.mid}</Text>}
+                  </Checkbox>
+                </div>
+              );
+            })
+          }
+        </div>
+
+        <div style={{ marginTop: 12, borderTop: '1px solid #E2E8F0', paddingTop: 12 }}>
+          <Checkbox
+            checked={massPersistExclude}
+            onChange={(e) => setMassPersistExclude(e.target.checked)}
+          >
+            <Text style={{ fontSize: 12 }}>Remember excluded stores for next time</Text>
+          </Checkbox>
+        </div>
+      </Modal>
     </div>
   );
 }

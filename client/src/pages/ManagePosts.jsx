@@ -105,7 +105,7 @@ export default function ManagePosts() {
     status: undefined,
     created_by: undefined,
     exclude_statuses: DEFAULT_EXCLUDE,
-    date_from: dayjs().subtract(30, 'day').format('YYYY-MM-DD'),
+    date_from: dayjs().subtract(2, 'month').format('YYYY-MM-DD'),
     date_to: dayjs().format('YYYY-MM-DD'),
   });
 
@@ -204,7 +204,7 @@ export default function ManagePosts() {
   };
 
   const clearFilters = () => {
-    setFilters({ merchant: undefined, platform: undefined, status: undefined, created_by: undefined, exclude_statuses: DEFAULT_EXCLUDE, date_from: dayjs().subtract(30, 'day').format('YYYY-MM-DD'), date_to: dayjs().format('YYYY-MM-DD') });
+    setFilters({ merchant: undefined, platform: undefined, status: undefined, created_by: undefined, exclude_statuses: DEFAULT_EXCLUDE, date_from: dayjs().subtract(2, 'month').format('YYYY-MM-DD'), date_to: dayjs().format('YYYY-MM-DD') });
   };
 
   // --- Individual actions ---
