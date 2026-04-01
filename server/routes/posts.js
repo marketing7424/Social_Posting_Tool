@@ -74,7 +74,7 @@ router.get('/', (req, res) => {
   if (status) { sql += ' AND status = ?'; params.push(status); }
   if (created_by) { sql += ' AND created_by = ?'; params.push(created_by); }
   if (date_from) { sql += ' AND created_at >= ?'; params.push(date_from); }
-  if (date_to) { sql += ' AND created_at <= ?'; params.push(date_to + ' 23:59:59'); }
+  if (date_to) { sql += ' AND created_at <= ?'; params.push(date_to); }
   if (exclude_statuses) {
     const excluded = exclude_statuses.split(',').map(s => s.trim()).filter(Boolean);
     if (excluded.length > 0) {

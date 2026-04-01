@@ -168,8 +168,16 @@ export default function ManagePosts() {
       const cleanFilters = {};
       Object.entries(filters).forEach(([k, v]) => {
         if (v !== undefined && v !== null && v !== '') {
-          // Convert array to comma-separated string for query params
-          cleanFilters[k] = Array.isArray(v) ? v.join(',') : v;
+          if (k === 'date_from') {
+            // Start of local day → UTC ISO string
+            cleanFilters[k] = dayjs(v).startOf('day').utc().format('YYYY-MM-DD HH:mm:ss');
+          } else if (k === 'date_to') {
+            // End of local day → UTC ISO string
+            cleanFilters[k] = dayjs(v).endOf('day').utc().format('YYYY-MM-DD HH:mm:ss');
+          } else {
+            // Convert array to comma-separated string for query params
+            cleanFilters[k] = Array.isArray(v) ? v.join(',') : v;
+          }
         }
       });
       const data = await getPosts(cleanFilters);
