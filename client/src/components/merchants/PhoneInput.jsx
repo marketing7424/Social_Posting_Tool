@@ -8,7 +8,9 @@ function formatPhone(digits) {
 }
 
 function stripNonDigits(str) {
-  return (str || '').replace(/\D/g, '').slice(0, 10);
+  const digits = (str || '').replace(/\D/g, '');
+  // If more than 10 digits (has country code), take rightmost 10
+  return digits.length > 10 ? digits.slice(-10) : digits;
 }
 
 export default function PhoneInput({ value, onChange, ...rest }) {

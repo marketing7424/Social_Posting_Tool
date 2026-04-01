@@ -14,6 +14,7 @@ import {
   Col,
   Tooltip,
   Checkbox,
+  Select,
 } from 'antd';
 import {
   ReloadOutlined,
@@ -101,6 +102,7 @@ export default function ManagePosts() {
     platform: undefined,
     status: undefined,
     created_by: undefined,
+    exclude_statuses: undefined,
   });
 
   // Selection state
@@ -163,7 +165,8 @@ export default function ManagePosts() {
       const cleanFilters = {};
       Object.entries(filters).forEach(([k, v]) => {
         if (v !== undefined && v !== null && v !== '') {
-          cleanFilters[k] = v;
+          // Convert array to comma-separated string for query params
+          cleanFilters[k] = Array.isArray(v) ? v.join(',') : v;
         }
       });
       const data = await getPosts(cleanFilters);
@@ -192,7 +195,7 @@ export default function ManagePosts() {
   };
 
   const clearFilters = () => {
-    setFilters({ merchant: undefined, platform: undefined, status: undefined, created_by: undefined });
+    setFilters({ merchant: undefined, platform: undefined, status: undefined, created_by: undefined, exclude_statuses: undefined });
   };
 
   // --- Individual actions ---
@@ -683,6 +686,18 @@ export default function ManagePosts() {
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
             </select>
+          </Col>
+          <Col flex="200px">
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder="Exclude Statuses"
+              value={filters.exclude_statuses || []}
+              onChange={(val) => handleFilterChange('exclude_statuses', val.length > 0 ? val : undefined)}
+              style={{ width: '100%' }}
+              options={STATUS_OPTIONS}
+              maxTagCount="responsive"
+            />
           </Col>
           <Col flex="160px">
             <select
