@@ -35,6 +35,18 @@ function getDb() {
       "ALTER TABLE merchants ADD COLUMN fb_token_created_at TEXT DEFAULT ''",
       "ALTER TABLE merchants ADD COLUMN google_token_created_at TEXT DEFAULT ''",
       "ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'",
+      // Google Business post type fields
+      "ALTER TABLE post_platforms ADD COLUMN google_post_type TEXT DEFAULT 'STANDARD'",
+      "ALTER TABLE post_platforms ADD COLUMN google_title TEXT DEFAULT ''",
+      "ALTER TABLE post_platforms ADD COLUMN google_start_date TEXT DEFAULT ''",
+      "ALTER TABLE post_platforms ADD COLUMN google_start_time TEXT DEFAULT ''",
+      "ALTER TABLE post_platforms ADD COLUMN google_end_date TEXT DEFAULT ''",
+      "ALTER TABLE post_platforms ADD COLUMN google_end_time TEXT DEFAULT ''",
+      "ALTER TABLE post_platforms ADD COLUMN google_coupon_code TEXT DEFAULT ''",
+      "ALTER TABLE post_platforms ADD COLUMN google_redeem_url TEXT DEFAULT ''",
+      "ALTER TABLE post_platforms ADD COLUMN google_terms TEXT DEFAULT ''",
+      "ALTER TABLE post_platforms ADD COLUMN google_cta_type TEXT DEFAULT ''",
+      "ALTER TABLE post_platforms ADD COLUMN google_cta_url TEXT DEFAULT ''",
     ];
     for (const sql of migrations) {
       try { db.exec(sql); } catch (_) { /* column already exists */ }

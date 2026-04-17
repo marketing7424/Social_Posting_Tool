@@ -20,6 +20,7 @@ import MediaGrid from '../components/media/MediaGrid';
 import LayoutSelector from '../components/media/LayoutSelector';
 import CaptionEditor from '../components/captions/CaptionEditor';
 import PreviewPanel from '../components/previews/PreviewPanel';
+import GooglePostTypeFields from '../components/google/GooglePostTypeFields';
 import {
   deleteMedia, generateCaptions, regenerateCaption,
   createPost, publishPost, getPostStatus, schedulePost,
@@ -57,6 +58,7 @@ export default function CreatePost() {
   const [scheduleDate, setScheduleDate] = useState(null);
   const [scheduleTime, setScheduleTime] = useState(null);
   const [publishResults, setPublishResults] = useState(null); // { status: 'publishing'|'done', platforms: { facebook: {status,error}, ... } }
+  const [googleFields, setGoogleFields] = useState({ googlePostType: 'STANDARD' });
 
   // Current step based on state
   const currentStep = !merchant ? 0 : mediaFiles.length === 0 ? 1 : selectedPlatforms.length === 0 ? 2 : 3;
@@ -176,6 +178,7 @@ export default function CreatePost() {
         mediaFiles: mediaFiles.map(f => ({ filename: f.filename, originalName: f.originalName, mimetype: f.mimetype })),
         fbLayout,
         fbLayoutVariant,
+        ...googleFields,
       });
       await publishPost(post.id);
       setPublishing(false);
@@ -215,7 +218,7 @@ export default function CreatePost() {
       setPublishing(false);
       setPublishResults(null);
     }
-  }, [merchant, selectedPlatforms, captions, mediaFiles, fbLayout, fbLayoutVariant]);
+  }, [merchant, selectedPlatforms, captions, mediaFiles, fbLayout, fbLayoutVariant, googleFields]);
 
   // Schedule
   const handleSchedule = useCallback(async () => {
@@ -238,6 +241,7 @@ export default function CreatePost() {
         mediaFiles: mediaFiles.map(f => ({ filename: f.filename, originalName: f.originalName, mimetype: f.mimetype })),
         fbLayout,
         scheduledTime,
+        ...googleFields,
       });
       await schedulePost(post.id, scheduledTime);
       message.success(`Scheduled for ${dayjs(scheduledTime).format('MMM D, YYYY h:mm A')}`);
@@ -248,7 +252,7 @@ export default function CreatePost() {
     } finally {
       setPublishing(false);
     }
-  }, [merchant, selectedPlatforms, captions, mediaFiles, fbLayout, scheduleDate, scheduleTime]);
+  }, [merchant, selectedPlatforms, captions, mediaFiles, fbLayout, scheduleDate, scheduleTime, googleFields]);
 
   const resetForm = () => {
     setMerchant(null);
@@ -260,6 +264,7 @@ export default function CreatePost() {
     setScheduleDate(null);
     setScheduleTime(null);
     setPublishResults(null);
+    setGoogleFields({ googlePostType: 'STANDARD' });
   };
 
   const hasContent = selectedPlatforms.some(p => captions[p]?.trim()) || mediaFiles.length > 0;
@@ -353,6 +358,15 @@ export default function CreatePost() {
             generating={generating}
             regeneratingPlatform={regeneratingPlatform}
           />
+          {selectedPlatforms.includes('google') && (
+            <>
+              <Divider style={{ margin: '12px 0' }} />
+              <GooglePostTypeFields
+                values={googleFields}
+                onChange={setGoogleFields}
+              />
+            </>
+          )}
         </Card>
 
         {/* 5. Publish */}

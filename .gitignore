@@ -8,3 +8,5 @@ data/
 uploads/
 skills-lock.json
 reference/
+.playwright-mcp/
+*.png

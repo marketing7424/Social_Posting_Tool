@@ -29,7 +29,7 @@ function getMerchantFromDb(mid) {
 
 // POST /api/posts
 router.post('/', (req, res) => {
-  const { merchantMid, platforms, captions, mediaFiles, fbLayout, fbLayoutVariant, scheduledTime } = req.body;
+  const { merchantMid, platforms, captions, mediaFiles, fbLayout, fbLayoutVariant, scheduledTime, googlePostType, googleTitle, googleStartDate, googleStartTime, googleEndDate, googleEndTime, googleCouponCode, googleRedeemUrl, googleTerms, googleCtaType, googleCtaUrl } = req.body;
   if (!merchantMid || !platforms || platforms.length === 0) {
     return res.status(400).json({ error: 'merchantMid and platforms are required' });
   }
@@ -43,9 +43,15 @@ router.post('/', (req, res) => {
   ).run(postId, merchantMid, status, scheduledTime || null, fbLayout || 'collage', fbLayoutVariant || 0, req.user?.id || null);
 
   for (const platform of platforms) {
-    db.prepare(
-      'INSERT INTO post_platforms (id, post_id, platform, caption) VALUES (?, ?, ?, ?)'
-    ).run(uuid(), postId, platform, captions?.[platform] || '');
+    if (platform === 'google') {
+      db.prepare(
+        'INSERT INTO post_platforms (id, post_id, platform, caption, google_post_type, google_title, google_start_date, google_start_time, google_end_date, google_end_time, google_coupon_code, google_redeem_url, google_terms, google_cta_type, google_cta_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).run(uuid(), postId, platform, captions?.[platform] || '', googlePostType || 'STANDARD', googleTitle || '', googleStartDate || '', googleStartTime || '', googleEndDate || '', googleEndTime || '', googleCouponCode || '', googleRedeemUrl || '', googleTerms || '', googleCtaType || '', googleCtaUrl || '');
+    } else {
+      db.prepare(
+        'INSERT INTO post_platforms (id, post_id, platform, caption) VALUES (?, ?, ?, ?)'
+      ).run(uuid(), postId, platform, captions?.[platform] || '');
+    }
   }
 
   for (let i = 0; i < (mediaFiles || []).length; i++) {
@@ -231,6 +237,11 @@ async function publishInBackground(postId) {
         result = await publishToGoogle({
           accessToken: merchant.googleToken, locationId: merchant.googleLocationId,
           caption: pp.caption, mediaFiles: imageFiles,
+          googlePostType: pp.google_post_type, googleTitle: pp.google_title,
+          googleStartDate: pp.google_start_date, googleStartTime: pp.google_start_time,
+          googleEndDate: pp.google_end_date, googleEndTime: pp.google_end_time,
+          googleCouponCode: pp.google_coupon_code, googleRedeemUrl: pp.google_redeem_url,
+          googleTerms: pp.google_terms, googleCtaType: pp.google_cta_type, googleCtaUrl: pp.google_cta_url,
         });
       } else {
         throw new Error(`Missing credentials for ${pp.platform}`);
@@ -369,6 +380,11 @@ router.post('/:id/retry', async (req, res) => {
         result = await publishToGoogle({
           accessToken: merchant.googleToken, locationId: merchant.googleLocationId,
           caption: pp.caption, mediaFiles: retryImageFiles,
+          googlePostType: pp.google_post_type, googleTitle: pp.google_title,
+          googleStartDate: pp.google_start_date, googleStartTime: pp.google_start_time,
+          googleEndDate: pp.google_end_date, googleEndTime: pp.google_end_time,
+          googleCouponCode: pp.google_coupon_code, googleRedeemUrl: pp.google_redeem_url,
+          googleTerms: pp.google_terms, googleCtaType: pp.google_cta_type, googleCtaUrl: pp.google_cta_url,
         });
       } else {
         throw new Error(`Missing credentials for ${pp.platform}`);

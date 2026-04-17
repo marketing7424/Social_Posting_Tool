@@ -15,6 +15,7 @@ import {
   createPost, publishPost, getPostStatus, schedulePost,
 } from '../api/client';
 import PreviewPanel from '../components/previews/PreviewPanel';
+import GooglePostTypeFields from '../components/google/GooglePostTypeFields';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, rectSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -52,6 +53,7 @@ function createEmptyRow() {
     platforms: ['facebook', 'instagram', 'google'],
     mediaFiles: [],
     captions: { facebook: '', instagram: '', google: '' },
+    googleFields: { googlePostType: 'STANDARD' },
     scheduleMode: 'now',
     scheduleDate: null,
     scheduleTime: null,
@@ -230,30 +232,32 @@ function SortableThumb({ file, onRemove }) {
 function RowMedia({ files, onAdd, onRemove, onReorder }) {
   const [uploading, setUploading] = useState(false);
   const hasVideo = files.some(isVideo);
+  const fileInputRef = useRef(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
-  const handleUpload = async (file) => {
-    const fileIsVideo = file.type?.startsWith('video/');
-    if (fileIsVideo && files.length > 0) {
-      message.warning('Only one video per post — remove existing media first');
-      return false;
+  const handleFiles = async (selectedFiles) => {
+    for (const file of selectedFiles) {
+      const fileIsVideo = file.type?.startsWith('video/');
+      if (fileIsVideo && files.length > 0) {
+        message.warning('Only one video per post — remove existing media first');
+        continue;
+      }
+      if (!fileIsVideo && hasVideo) {
+        message.warning('Cannot mix images and video');
+        continue;
+      }
+      setUploading(true);
+      try {
+        const formData = new FormData();
+        formData.append('files', file);
+        const result = await uploadMedia(formData);
+        onAdd(Array.isArray(result) ? result : [result]);
+      } catch {
+        message.error('Upload failed');
+      } finally {
+        setUploading(false);
+      }
     }
-    if (!fileIsVideo && hasVideo) {
-      message.warning('Cannot mix images and video');
-      return false;
-    }
-    setUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append('files', file);
-      const result = await uploadMedia(formData);
-      onAdd(Array.isArray(result) ? result : [result]);
-    } catch {
-      message.error('Upload failed');
-    } finally {
-      setUploading(false);
-    }
-    return false;
   };
 
   const handleDragEnd = (event) => {
@@ -265,28 +269,42 @@ function RowMedia({ files, onAdd, onRemove, onReorder }) {
   };
 
   return (
-    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-      <SortableContext items={files.map(f => f.filename)} strategy={rectSortingStrategy}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={files.map(f => f.filename)} strategy={rectSortingStrategy}>
           {files.map((f, i) => (
             <SortableThumb key={f.filename} file={f}
               onRemove={() => { deleteMedia(f.filename).catch(() => {}); onRemove(i); }} />
           ))}
-          {(!hasVideo || files.length === 0) && (
-            <Upload accept="image/*,video/mp4" showUploadList={false} beforeUpload={handleUpload} multiple={!hasVideo}>
-              <div style={{
-                width: 56, height: 56, borderRadius: 6,
-                border: '2px dashed #CBD5E1', display: 'flex',
-                alignItems: 'center', justifyContent: 'center',
-                cursor: 'pointer', color: '#94A3B8', fontSize: 18, background: '#F8FAFC',
-              }}>
-                {uploading ? <LoadingOutlined /> : <PlusOutlined />}
-              </div>
-            </Upload>
-          )}
-        </div>
-      </SortableContext>
-    </DndContext>
+        </SortableContext>
+      </DndContext>
+      {(!hasVideo || files.length === 0) && (
+        <>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/gif,image/webp,video/mp4"
+            multiple={!hasVideo}
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              if (e.target.files?.length) handleFiles(Array.from(e.target.files));
+              e.target.value = '';
+            }}
+          />
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            style={{
+              width: 56, height: 56, borderRadius: 6,
+              border: '2px dashed #CBD5E1', display: 'flex',
+              alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer', color: '#94A3B8', fontSize: 18, background: '#F8FAFC',
+            }}
+          >
+            {uploading ? <LoadingOutlined /> : <PlusOutlined />}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -623,6 +641,7 @@ export default function BulkSchedule() {
         captions: { ...source.captions },
         platforms: [...source.platforms],
         mediaFiles: [...source.mediaFiles],
+        googleFields: { ...(source.googleFields || { googlePostType: 'STANDARD' }) },
       };
       const next = [...prev];
       next.splice(idx + 1, 0, copy);
@@ -791,6 +810,7 @@ export default function BulkSchedule() {
           mediaFiles: row.mediaFiles.map(f => ({ filename: f.filename, originalName: f.originalName, mimetype: f.mimetype })),
           fbLayout: 'collage',
           scheduledTime,
+          ...(row.googleFields || {}),
         });
 
         if (row.scheduleMode === 'schedule' && scheduledTime) {
@@ -987,6 +1007,15 @@ export default function BulkSchedule() {
                   );
                 })}
               </div>
+
+              {/* Google Post Type */}
+              {row.platforms.includes('google') && (
+                <GooglePostTypeFields
+                  values={row.googleFields}
+                  onChange={(fields) => updateRow(row.id, { googleFields: fields })}
+                  compact
+                />
+              )}
 
               {/* Schedule */}
               <div>

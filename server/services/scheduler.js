@@ -189,6 +189,11 @@ async function processScheduledPosts() {
             locationId: merchant.googleLocationId,
             caption: pp.caption,
             mediaFiles: imageFiles,
+            googlePostType: pp.google_post_type, googleTitle: pp.google_title,
+            googleStartDate: pp.google_start_date, googleStartTime: pp.google_start_time,
+            googleEndDate: pp.google_end_date, googleEndTime: pp.google_end_time,
+            googleCouponCode: pp.google_coupon_code, googleRedeemUrl: pp.google_redeem_url,
+            googleTerms: pp.google_terms, googleCtaType: pp.google_cta_type, googleCtaUrl: pp.google_cta_url,
           });
         } else {
           throw new Error(`Missing credentials for ${pp.platform}`);

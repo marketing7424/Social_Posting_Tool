@@ -520,7 +520,7 @@ async function getGoogleAccessToken(refreshToken) {
   return token;
 }
 
-async function publishToGoogle({ accessToken, locationId, caption, mediaFiles }) {
+async function publishToGoogle({ accessToken, locationId, caption, mediaFiles, googlePostType, googleTitle, googleStartDate, googleStartTime, googleEndDate, googleEndTime, googleCouponCode, googleRedeemUrl, googleTerms, googleCtaType, googleCtaUrl }) {
   if (!accessToken || !locationId) throw new Error('Google Business credentials not configured');
 
   const token = await getGoogleAccessToken(accessToken);
@@ -528,8 +528,70 @@ async function publishToGoogle({ accessToken, locationId, caption, mediaFiles })
   const headers = { Authorization: `Bearer ${token}` };
   const hasCaption = caption && caption.trim().length > 0;
   const hasMedia = mediaFiles && mediaFiles.length > 0;
+  const postType = googlePostType || 'STANDARD';
 
-  // If there's a caption → create a local post (appears in Updates/Posts section)
+  // EVENT or OFFER posts — require title and dates
+  if (postType === 'EVENT' || postType === 'OFFER') {
+    if (!googleTitle) throw new Error(`Title is required for ${postType} posts`);
+    if (!googleStartDate || !googleEndDate) throw new Error(`Start and end dates are required for ${postType} posts`);
+
+    return withRetry(async () => {
+      const startParts = googleStartDate.split('-'); // YYYY-MM-DD
+      const endParts = googleEndDate.split('-');
+      const startTimeParts = googleStartTime ? googleStartTime.split(':') : ['9', '0'];
+      const endTimeParts = googleEndTime ? googleEndTime.split(':') : ['17', '0'];
+
+      const body = {
+        languageCode: 'en',
+        topicType: postType,
+        event: {
+          title: googleTitle,
+          schedule: {
+            startDate: { year: Number(startParts[0]), month: Number(startParts[1]), day: Number(startParts[2]) },
+            startTime: { hours: Number(startTimeParts[0]), minutes: Number(startTimeParts[1]), seconds: 0, nanos: 0 },
+            endDate: { year: Number(endParts[0]), month: Number(endParts[1]), day: Number(endParts[2]) },
+            endTime: { hours: Number(endTimeParts[0]), minutes: Number(endTimeParts[1]), seconds: 0, nanos: 0 },
+          },
+        },
+      };
+
+      if (hasCaption) body.summary = caption;
+
+      if (hasMedia) {
+        body.media = {
+          mediaFormat: 'PHOTO',
+          sourceUrl: `${baseUrl}/uploads/${mediaFiles[0]}`,
+        };
+      }
+
+      // Add offer-specific fields
+      if (postType === 'OFFER') {
+        body.offer = {};
+        if (googleCouponCode) body.offer.couponCode = googleCouponCode;
+        if (googleRedeemUrl) body.offer.redeemOnlineUrl = googleRedeemUrl;
+        if (googleTerms) body.offer.termsConditions = googleTerms;
+      }
+
+      // Add Call to Action button
+      if (googleCtaType) {
+        body.callToAction = { actionType: googleCtaType };
+        if (googleCtaType !== 'CALL' && googleCtaUrl) {
+          body.callToAction.url = googleCtaUrl;
+        }
+      }
+
+      console.log(`[google] Creating ${postType} post for`, locationId);
+      const resp = await axios.post(
+        `${GOOGLE_API}/${locationId}/localPosts`,
+        body,
+        { headers }
+      );
+      console.log(`[google] ${postType} post created:`, resp.data.name);
+      return { postId: resp.data.name };
+    });
+  }
+
+  // STANDARD post — existing behavior
   if (hasCaption) {
     return withRetry(async () => {
       const body = {
@@ -543,6 +605,15 @@ async function publishToGoogle({ accessToken, locationId, caption, mediaFiles })
           sourceUrl: `${baseUrl}/uploads/${mediaFiles[0]}`,
         };
       }
+
+      // Add Call to Action button for standard posts too
+      if (googleCtaType) {
+        body.callToAction = { actionType: googleCtaType };
+        if (googleCtaType !== 'CALL' && googleCtaUrl) {
+          body.callToAction.url = googleCtaUrl;
+        }
+      }
+
       console.log('[google] Creating local post for', locationId);
       const resp = await axios.post(
         `${GOOGLE_API}/${locationId}/localPosts`,
