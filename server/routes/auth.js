@@ -147,13 +147,21 @@ router.delete('/users/:id', authenticate, requireAdmin, (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  // Don't allow deleting admin emails
   if (ADMIN_EMAILS.includes(user.email)) {
     return res.status(403).json({ error: 'Cannot delete admin accounts' });
   }
 
-  db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
-  res.json({ success: true });
+  try {
+    const tx = db.transaction(() => {
+      db.prepare('UPDATE posts SET created_by = NULL WHERE created_by = ?').run(user.id);
+      db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+    });
+    tx();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete user failed:', err);
+    res.status(500).json({ error: err.message || 'Failed to delete user' });
+  }
 });
 
 module.exports = router;
