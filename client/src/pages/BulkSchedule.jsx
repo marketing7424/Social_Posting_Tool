@@ -10,12 +10,15 @@ import {
   ThunderboltOutlined, PlayCircleFilled, ReloadOutlined, EditOutlined, EyeOutlined, EyeInvisibleOutlined, CopyOutlined, TeamOutlined, SearchOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+dayjs.extend(utc);
 import {
   searchMerchants, uploadMedia, deleteMedia, generateCaptions, regenerateCaption,
-  createPost, publishPost, getPostStatus, schedulePost,
+  createPost, publishPost, getPostStatus, schedulePost, getPosts,
 } from '../api/client';
 import PreviewPanel from '../components/previews/PreviewPanel';
 import GooglePostTypeFields from '../components/google/GooglePostTypeFields';
+import { appendHashtags } from '../utils/hashtags';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, rectSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -44,6 +47,59 @@ const QUICK_SUGGESTIONS = [
 
 function isVideo(file) {
   return file.mimetype?.startsWith('video/') || file.filename?.match(/\.(mp4|mov|avi)$/i);
+}
+
+async function fetchMerchantStats(mid) {
+  try {
+    const posts = await getPosts({ merchant: mid, limit: 100, exclude_statuses: 'draft,failed,deleted' });
+    let lastPublished = null;
+    const upcoming = [];
+    const now = dayjs();
+    for (const p of (posts || [])) {
+      for (const pp of (p.platforms || [])) {
+        if (pp.status !== 'success') continue;
+        const ts = pp.published_at || p.created_at;
+        if (!ts) continue;
+        const d = dayjs.utc(ts).local();
+        if (!lastPublished || d.isAfter(lastPublished)) lastPublished = d;
+      }
+      if (p.status === 'scheduled' && p.scheduled_time) {
+        const d = dayjs(p.scheduled_time);
+        if (d.isAfter(now)) upcoming.push(d);
+      }
+    }
+    upcoming.sort((a, b) => a.valueOf() - b.valueOf());
+    return { lastPublished, upcoming };
+  } catch {
+    return { lastPublished: null, upcoming: [] };
+  }
+}
+
+function MerchantStats({ stats }) {
+  if (!stats) return null;
+  const { lastPublished, upcoming } = stats;
+  if (!lastPublished && (!upcoming || upcoming.length === 0)) return null;
+  return (
+    <div style={{ fontSize: 11, marginTop: 4, lineHeight: 1.45 }}>
+      {lastPublished && (
+        <div style={{ color: '#DC2626' }}>
+          <div>Last published:</div>
+          <div style={{ paddingLeft: 8 }}>{lastPublished.format('MMM D, YYYY h:mm A')}</div>
+        </div>
+      )}
+      {upcoming && upcoming.length > 0 && (
+        <div style={{ color: '#16A34A' }}>
+          <div>Upcoming:</div>
+          {upcoming.slice(0, 3).map((d, i) => (
+            <div key={i} style={{ paddingLeft: 8 }}>{d.format('MMM D, YYYY h:mm A')}</div>
+          ))}
+          {upcoming.length > 3 && (
+            <div style={{ paddingLeft: 8 }}>(+{upcoming.length - 3} more)</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function createEmptyRow() {
@@ -735,6 +791,12 @@ export default function BulkSchedule() {
         result.facebook = sharedCaption;
         result.instagram = sharedCaption;
       }
+      const tags = row.merchant?.hashtags || '';
+      if (tags) {
+        for (const p of Object.keys(result)) {
+          result[p] = appendHashtags(result[p], tags);
+        }
+      }
       updateRow(row.id, { captions: { ...row.captions, ...result }, generating: false });
     } catch (err) {
       message.error('AI generation failed');
@@ -756,10 +818,12 @@ export default function BulkSchedule() {
         merchantWebsite: row.merchant?.website || '',
         mediaFiles: row.mediaFiles.map(f => f.filename),
       });
+      // Append merchant's default hashtags so user sees and can edit them
+      const withTags = appendHashtags(result.caption, row.merchant?.hashtags || '');
       // Sync FB and IG captions
-      const updated = { [platform]: result.caption };
-      if (platform === 'facebook') updated.instagram = result.caption;
-      if (platform === 'instagram') updated.facebook = result.caption;
+      const updated = { [platform]: withTags };
+      if (platform === 'facebook') updated.instagram = withTags;
+      if (platform === 'instagram') updated.facebook = withTags;
       updateRow(row.id, {
         captions: { ...row.captions, ...updated },
         regeneratingPlatform: null,
@@ -912,7 +976,13 @@ export default function BulkSchedule() {
               <div>
                 <RowMerchantSelect
                   value={row.merchant}
-                  onChange={(m) => updateRow(row.id, { merchant: m })}
+                  onChange={async (m) => {
+                    updateRow(row.id, { merchant: m, merchantStats: null });
+                    if (m?.mid) {
+                      const stats = await fetchMerchantStats(m.mid);
+                      updateRow(row.id, { merchantStats: stats });
+                    }
+                  }}
                 />
                 <div style={{ marginTop: 6 }}>
                   <PlatformToggles
@@ -922,6 +992,7 @@ export default function BulkSchedule() {
                     onChange={(p, checked) => togglePlatform(row.id, p, checked)}
                   />
                 </div>
+                <MerchantStats stats={row.merchantStats} />
                 <PublishResultBadges result={row.result} />
                 <Button
                   type="text" size="small"

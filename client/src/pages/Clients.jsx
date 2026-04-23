@@ -129,6 +129,7 @@ export default function Clients() {
       address: merchant.address,
       phone: merchant.phone,
       website: merchant.website,
+      hashtags: merchant.hashtags || '',
     });
     setModalOpen(true);
   };
@@ -314,6 +315,13 @@ export default function Clients() {
           </Form.Item>
           <Form.Item name="website" label="Website">
             <Input placeholder="https://www.example.com" />
+          </Form.Item>
+          <Form.Item
+            name="hashtags"
+            label="Default Hashtags (optional)"
+            extra="Auto-added to every post for this client. Example: #nailspa #grandopening"
+          >
+            <Input.TextArea rows={2} placeholder="#tag1 #tag2 #tag3" />
           </Form.Item>
         </Form>
       </Modal>

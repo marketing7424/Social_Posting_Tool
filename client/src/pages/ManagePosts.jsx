@@ -58,6 +58,7 @@ const QUICK_SUGGESTIONS = [
   { label: 'Urgent CTA', value: 'Add urgency and a stronger call-to-action' },
 ];
 import SearchableSelect from '../components/merchants/SearchableSelect';
+import { appendHashtags } from '../utils/hashtags';
 
 const { TextArea } = Input;
 const { Text, Title } = Typography;
@@ -372,6 +373,12 @@ export default function ManagePosts() {
         merchantWebsite: merchant?.website || '',
         platforms,
       });
+      const tags = merchant?.hashtags || '';
+      if (tags) {
+        for (const p of Object.keys(result)) {
+          result[p] = appendHashtags(result[p], tags);
+        }
+      }
       setRepostCaptions(prev => ({ ...prev, ...result }));
       message.success('Captions regenerated');
     } catch {
@@ -396,7 +403,8 @@ export default function ManagePosts() {
         merchantWebsite: merchant?.website || '',
         mediaFiles: (repostingPost.media || []).map(f => f.filename),
       });
-      setRepostCaptions(prev => ({ ...prev, [platform]: result.caption }));
+      const withTags = appendHashtags(result.caption, merchant?.hashtags || '');
+      setRepostCaptions(prev => ({ ...prev, [platform]: withTags }));
     } catch {
       message.error('Regeneration failed');
     } finally {

@@ -166,30 +166,31 @@ export default function GooglePostTypeFields({ values, onChange, compact = false
             />
           )}
 
-          {/* CTA Button — for Event posts */}
-          {googlePostType === 'EVENT' && (
-            <div>
-              <Text style={{ fontSize, color: '#475569' }}>Button</Text>
-              <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
-                <Select
-                  value={googleCtaType || ''}
-                  onChange={(v) => update('googleCtaType', v)}
-                  options={CTA_OPTIONS}
-                  size={inputSize}
-                  style={{ width: 140 }}
-                />
-                {googleCtaType && googleCtaType !== 'CALL' && (
-                  <Input
-                    value={googleCtaUrl}
-                    onChange={(e) => update('googleCtaUrl', e.target.value)}
-                    placeholder="https://..."
-                    size={inputSize}
-                    style={{ flex: 1 }}
-                  />
-                )}
-              </div>
-            </div>
-          )}
+        </div>
+      )}
+
+      {/* CTA Button — for Update and Event posts (Offer uses its own fields) */}
+      {(googlePostType === 'STANDARD' || googlePostType === 'EVENT') && (
+        <div style={{ marginTop: googlePostType === 'STANDARD' ? 0 : 8 }}>
+          <Text style={{ fontSize, color: '#475569' }}>Button</Text>
+          <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+            <Select
+              value={googleCtaType || ''}
+              onChange={(v) => update('googleCtaType', v)}
+              options={CTA_OPTIONS}
+              size={inputSize}
+              style={{ width: 140 }}
+            />
+            {googleCtaType && googleCtaType !== 'CALL' && (
+              <Input
+                value={googleCtaUrl}
+                onChange={(e) => update('googleCtaUrl', e.target.value)}
+                placeholder="https://..."
+                size={inputSize}
+                style={{ flex: 1 }}
+              />
+            )}
+          </div>
         </div>
       )}
     </div>

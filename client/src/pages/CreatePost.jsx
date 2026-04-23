@@ -21,6 +21,7 @@ import LayoutSelector from '../components/media/LayoutSelector';
 import CaptionEditor from '../components/captions/CaptionEditor';
 import PreviewPanel from '../components/previews/PreviewPanel';
 import GooglePostTypeFields from '../components/google/GooglePostTypeFields';
+import { appendHashtags } from '../utils/hashtags';
 import {
   deleteMedia, generateCaptions, regenerateCaption,
   createPost, publishPost, getPostStatus, schedulePost,
@@ -120,6 +121,13 @@ export default function CreatePost() {
         result.facebook = sharedCaption;
         result.instagram = sharedCaption;
       }
+      // Append merchant's default hashtags so user sees and can edit them
+      const tags = merchant?.hashtags || '';
+      if (tags) {
+        for (const p of Object.keys(result)) {
+          result[p] = appendHashtags(result[p], tags);
+        }
+      }
       setCaptions(prev => ({ ...prev, ...result }));
       message.success('Captions generated!');
     } catch (err) {
@@ -142,10 +150,12 @@ export default function CreatePost() {
         merchantWebsite: merchant?.website || '',
         mediaFiles: mediaFiles.map(f => f.filename),
       });
+      // Append merchant's default hashtags so user sees and can edit them
+      const withTags = appendHashtags(result.caption, merchant?.hashtags || '');
       // Sync FB and IG captions
-      const updated = { [platform]: result.caption };
-      if (platform === 'facebook') updated.instagram = result.caption;
-      if (platform === 'instagram') updated.facebook = result.caption;
+      const updated = { [platform]: withTags };
+      if (platform === 'facebook') updated.instagram = withTags;
+      if (platform === 'instagram') updated.facebook = withTags;
       setCaptions(prev => ({ ...prev, ...updated }));
       message.success(`${platform} caption regenerated`);
     } catch (err) {
