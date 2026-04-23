@@ -161,10 +161,18 @@ function formatPhone(raw) {
   return raw;
 }
 
+function formatPhoneLine(phone1, phone2) {
+  const has = (p) => (p || '').replace(/\D/g, '').length >= 10;
+  const a = has(phone1) ? formatPhone(phone1) : '';
+  const b = has(phone2) ? formatPhone(phone2) : '';
+  if (a && b) return `${a} or ${b}`;
+  return a || b || '';
+}
+
 function fillMerchantInfo(prompt, merchant) {
   return prompt
     .replace(/\{name\}/g, merchant.name || 'Business Name')
-    .replace(/\{phone\}/g, formatPhone(merchant.phone))
+    .replace(/\{phone\}/g, merchant.phoneDisplay || '(xxx) xxx-xxxx')
     .replace(/\{address\}/g, merchant.address || 'Business Address')
     .replace(/\{website\}/g, merchant.website || '');
 }
@@ -213,13 +221,15 @@ async function loadImagesForAI(mediaFiles) {
   return imageContent;
 }
 
-async function generateCaptions({ mediaFiles, merchantName, merchantPhone, merchantAddress, merchantWebsite, platforms, context }) {
+async function generateCaptions({ mediaFiles, merchantName, merchantPhone, merchantPhone2, merchantAddress, merchantWebsite, platforms, context }) {
   const imageContent = await loadImagesForAI(mediaFiles);
   const seasonalContext = getSeasonalContext();
 
+  const phoneDisplay = formatPhoneLine(merchantPhone, merchantPhone2);
   const merchantInfo = {
     name: merchantName || 'this business',
-    phone: formatPhone(merchantPhone),
+    phone: phoneDisplay,
+    phoneDisplay,
     address: merchantAddress || '',
     website: merchantWebsite || '',
   };
@@ -321,13 +331,15 @@ Return ONLY the caption text.`,
   return captions;
 }
 
-async function regenerateCaption({ platform, currentCaption, feedback, merchantName, merchantPhone, merchantAddress, merchantWebsite, mediaFiles }) {
+async function regenerateCaption({ platform, currentCaption, feedback, merchantName, merchantPhone, merchantPhone2, merchantAddress, merchantWebsite, mediaFiles }) {
   const imageContent = await loadImagesForAI(mediaFiles);
   const seasonalContext = getSeasonalContext();
 
+  const phoneDisplay = formatPhoneLine(merchantPhone, merchantPhone2);
   const merchantInfo = {
     name: merchantName || 'this business',
-    phone: formatPhone(merchantPhone),
+    phone: phoneDisplay,
+    phoneDisplay,
     address: merchantAddress || '',
     website: merchantWebsite || '',
   };

@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS merchants (
   dba_name TEXT NOT NULL,
   address TEXT DEFAULT '',
   phone TEXT DEFAULT '',
+  phone2 TEXT DEFAULT '',
   website TEXT DEFAULT '',
   fb_page_id TEXT DEFAULT '',
   fb_token TEXT DEFAULT '',

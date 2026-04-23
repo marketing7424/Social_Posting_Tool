@@ -128,6 +128,7 @@ export default function Clients() {
       dbaName: merchant.dbaName,
       address: merchant.address,
       phone: merchant.phone,
+      phone2: merchant.phone2 || '',
       website: merchant.website,
       hashtags: merchant.hashtags || '',
     });
@@ -190,14 +191,16 @@ export default function Clients() {
     },
     {
       title: 'Phone',
-      dataIndex: 'phone',
       key: 'phone',
       responsive: ['md'],
-      render: (text) => {
-        if (!text) return '';
-        const d = text.replace(/\D/g, '').slice(0, 10);
-        if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
-        return text;
+      render: (_, r) => {
+        const fmt = (t) => {
+          const d = (t || '').replace(/\D/g, '').slice(0, 10);
+          return d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : (t || '');
+        };
+        const a = fmt(r.phone);
+        const b = fmt(r.phone2);
+        return a && b ? `${a} or ${b}` : (a || b || '');
       },
     },
     {
@@ -311,6 +314,9 @@ export default function Clients() {
             <Input placeholder="Street address" />
           </Form.Item>
           <Form.Item name="phone" label="Phone">
+            <PhoneInput />
+          </Form.Item>
+          <Form.Item name="phone2" label="Phone 2 (optional)">
             <PhoneInput />
           </Form.Item>
           <Form.Item name="website" label="Website">

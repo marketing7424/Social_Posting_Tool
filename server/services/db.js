@@ -48,6 +48,7 @@ function getDb() {
       "ALTER TABLE post_platforms ADD COLUMN google_cta_type TEXT DEFAULT ''",
       "ALTER TABLE post_platforms ADD COLUMN google_cta_url TEXT DEFAULT ''",
       "ALTER TABLE merchants ADD COLUMN hashtags TEXT DEFAULT ''",
+      "ALTER TABLE merchants ADD COLUMN phone2 TEXT DEFAULT ''",
     ];
     for (const sql of migrations) {
       try { db.exec(sql); } catch (_) { /* column already exists */ }

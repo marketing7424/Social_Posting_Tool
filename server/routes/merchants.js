@@ -22,6 +22,7 @@ function rowToMerchant(row) {
     dbaName: row.dba_name,
     address: row.address || '',
     phone: row.phone || '',
+    phone2: row.phone2 || '',
     website: row.website || '',
     fbPageId: row.fb_page_id || '',
     fbToken: row.fb_token || '',
@@ -68,7 +69,7 @@ router.get('/:mid', (req, res) => {
 
 // POST /api/merchants
 router.post('/', (req, res) => {
-  const { mid, dbaName, address, phone, website, hashtags } = req.body;
+  const { mid, dbaName, address, phone, phone2, website, hashtags } = req.body;
   if (!mid || !dbaName) {
     return res.status(400).json({ error: 'MID and DBA Name are required' });
   }
@@ -80,10 +81,11 @@ router.post('/', (req, res) => {
   }
 
   const formattedPhone = formatPhone(phone);
+  const formattedPhone2 = formatPhone(phone2);
   const detectedTz = timezoneFromAddress(address) || '';
   db.prepare(
-    'INSERT INTO merchants (mid, dba_name, address, phone, website, timezone, hashtags) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(mid, dbaName, address || '', formattedPhone, website || '', detectedTz, hashtags || '');
+    'INSERT INTO merchants (mid, dba_name, address, phone, phone2, website, timezone, hashtags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(mid, dbaName, address || '', formattedPhone, formattedPhone2, website || '', detectedTz, hashtags || '');
 
   const merchant = db.prepare('SELECT * FROM merchants WHERE mid = ?').get(mid);
   res.status(201).json(rowToMerchant(merchant));
@@ -100,7 +102,7 @@ router.patch('/:mid', (req, res) => {
   const values = [];
 
   const fieldMap = {
-    dbaName: 'dba_name', address: 'address', phone: 'phone', website: 'website',
+    dbaName: 'dba_name', address: 'address', phone: 'phone', phone2: 'phone2', website: 'website',
     timezone: 'timezone', hashtags: 'hashtags',
     fbPageId: 'fb_page_id', fbToken: 'fb_token', fbPageName: 'fb_page_name',
     igUserId: 'ig_user_id', igToken: 'ig_token', igUsername: 'ig_username',
@@ -117,7 +119,7 @@ router.patch('/:mid', (req, res) => {
 
   for (const [key, col] of Object.entries(fieldMap)) {
     if (updates[key] !== undefined) {
-      const val = key === 'phone' ? formatPhone(updates[key]) : updates[key];
+      const val = (key === 'phone' || key === 'phone2') ? formatPhone(updates[key]) : updates[key];
       fields.push(`${col} = ?`);
       values.push(val);
     }
