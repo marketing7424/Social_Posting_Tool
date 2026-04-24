@@ -7,7 +7,7 @@ import {
   PlusOutlined, DeleteOutlined, SendOutlined, ClockCircleOutlined,
   LoadingOutlined, CheckCircleFilled, CloseCircleFilled,
   FacebookFilled, InstagramFilled, GoogleOutlined,
-  ThunderboltOutlined, PlayCircleFilled, ReloadOutlined, EditOutlined, EyeOutlined, EyeInvisibleOutlined, CopyOutlined, TeamOutlined, SearchOutlined,
+  ThunderboltOutlined, PlayCircleFilled, ReloadOutlined, EditOutlined, EyeOutlined, EyeInvisibleOutlined, CopyOutlined, TeamOutlined, SearchOutlined, NumberOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
@@ -995,6 +995,19 @@ export default function BulkSchedule() {
                   />
                 </div>
                 <MerchantStats stats={row.merchantStats} />
+                {row.merchant?.hashtags && (
+                  <div style={{ marginTop: 4 }}>
+                    <Tooltip title={row.merchant.hashtags}>
+                      <Tag
+                        color="purple"
+                        icon={<NumberOutlined />}
+                        style={{ fontSize: 10, padding: '0 6px', lineHeight: '18px', margin: 0 }}
+                      >
+                        Has hashtags
+                      </Tag>
+                    </Tooltip>
+                  </div>
+                )}
                 <PublishResultBadges result={row.result} />
                 <Button
                   type="text" size="small"
