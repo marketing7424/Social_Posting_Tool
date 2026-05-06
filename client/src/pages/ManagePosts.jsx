@@ -1415,22 +1415,33 @@ export default function ManagePosts() {
         footer={null}
         width={600}
       >
-        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
-          Pick the failed post that this post is fixing. Only failed posts from the last 14 days are shown.
-        </Text>
+        {(() => {
+          const sourcePost = posts.find(p => p.id === linkPickerPostId);
+          const sourceMid = sourcePost?.merchant_mid;
+          const sourceMerchantName = sourceMid ? getMerchantName(sourceMid) : '';
+          return (
+            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
+              Pick the failed post that this post is fixing. Showing only{sourceMerchantName ? <> failed posts for <Text strong>{sourceMerchantName}</Text></> : ' failed posts'} from the last 14 days.
+            </Text>
+          );
+        })()}
         {(() => {
           if (linkPickerLoading) {
             return <Text type="secondary">Loading failed posts…</Text>;
           }
+          const sourcePost = posts.find(p => p.id === linkPickerPostId);
+          const sourceMid = sourcePost?.merchant_mid;
           const candidates = linkPickerCandidates.filter(p => {
             if (p.id === linkPickerPostId) return false;
             if (p.reposted_as) return false;
+            // Only show failed posts for the same merchant
+            if (sourceMid && p.merchant_mid !== sourceMid) return false;
             return (p.platforms || []).some(pp =>
               pp.status === 'failed' && !isNotConnectedError(pp.error)
             );
           });
           if (candidates.length === 0) {
-            return <Text type="secondary">No failed posts in the last 14 days that aren't already linked.</Text>;
+            return <Text type="secondary">No failed posts for this merchant in the last 14 days that aren't already linked.</Text>;
           }
           return (
             <div style={{ maxHeight: 400, overflowY: 'auto' }}>
