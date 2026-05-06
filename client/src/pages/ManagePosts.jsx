@@ -630,22 +630,41 @@ export default function ManagePosts() {
     {
       title: 'Repost',
       key: 'repost',
-      width: 110,
+      width: 130,
       render: (_, record) => {
-        if (!record.original_post_id) return null;
-        return (
-          <Tooltip title="Click to jump to the original failed/partial post">
-            <a
-              onClick={(e) => {
-                e.preventDefault();
-                jumpToPost(record.original_post_id);
-              }}
-              style={{ fontSize: 12, color: '#2563EB', fontWeight: 600 }}
-            >
-              Repost ↗
-            </a>
-          </Tooltip>
-        );
+        // Row is a repost — link back to the original failed/partial post
+        if (record.original_post_id) {
+          return (
+            <Tooltip title="Click to jump to the original failed/partial post">
+              <a
+                onClick={(e) => {
+                  e.preventDefault();
+                  jumpToPost(record.original_post_id);
+                }}
+                style={{ fontSize: 12, color: '#2563EB', fontWeight: 600 }}
+              >
+                ← Original
+              </a>
+            </Tooltip>
+          );
+        }
+        // Row has been reposted — link forward to the new repost
+        if (record.reposted_as) {
+          return (
+            <Tooltip title="Already reposted — click to jump to the repost">
+              <a
+                onClick={(e) => {
+                  e.preventDefault();
+                  jumpToPost(record.reposted_as);
+                }}
+                style={{ fontSize: 12, color: '#16A34A', fontWeight: 600 }}
+              >
+                Reposted ↗
+              </a>
+            </Tooltip>
+          );
+        }
+        return null;
       },
     },
     {
