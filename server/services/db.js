@@ -49,6 +49,9 @@ function getDb() {
       "ALTER TABLE post_platforms ADD COLUMN google_cta_url TEXT DEFAULT ''",
       "ALTER TABLE merchants ADD COLUMN hashtags TEXT DEFAULT ''",
       "ALTER TABLE merchants ADD COLUMN phone2 TEXT DEFAULT ''",
+      // Repost linking: original_post_id on the new post, reposted_as on the original
+      "ALTER TABLE posts ADD COLUMN original_post_id TEXT DEFAULT ''",
+      "ALTER TABLE posts ADD COLUMN reposted_as TEXT DEFAULT ''",
     ];
     for (const sql of migrations) {
       try { db.exec(sql); } catch (_) { /* column already exists */ }

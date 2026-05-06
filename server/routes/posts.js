@@ -29,7 +29,7 @@ function getMerchantFromDb(mid) {
 
 // POST /api/posts
 router.post('/', (req, res) => {
-  const { merchantMid, platforms, captions, mediaFiles, fbLayout, fbLayoutVariant, scheduledTime, googlePostType, googleTitle, googleStartDate, googleStartTime, googleEndDate, googleEndTime, googleCouponCode, googleRedeemUrl, googleTerms, googleCtaType, googleCtaUrl } = req.body;
+  const { merchantMid, platforms, captions, mediaFiles, fbLayout, fbLayoutVariant, scheduledTime, originalPostId, googlePostType, googleTitle, googleStartDate, googleStartTime, googleEndDate, googleEndTime, googleCouponCode, googleRedeemUrl, googleTerms, googleCtaType, googleCtaUrl } = req.body;
   if (!merchantMid || !platforms || platforms.length === 0) {
     return res.status(400).json({ error: 'merchantMid and platforms are required' });
   }
@@ -39,8 +39,16 @@ router.post('/', (req, res) => {
   const status = scheduledTime ? 'scheduled' : 'draft';
 
   db.prepare(
-    'INSERT INTO posts (id, merchant_mid, status, scheduled_time, fb_layout, fb_layout_variant, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(postId, merchantMid, status, scheduledTime || null, fbLayout || 'collage', fbLayoutVariant || 0, req.user?.id || null);
+    'INSERT INTO posts (id, merchant_mid, status, scheduled_time, fb_layout, fb_layout_variant, created_by, original_post_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(postId, merchantMid, status, scheduledTime || null, fbLayout || 'collage', fbLayoutVariant || 0, req.user?.id || null, originalPostId || '');
+
+  if (originalPostId) {
+    // Link the original back to this new repost so the failed row can show
+    // "Reposted →" in the UI without an extra query per row.
+    try {
+      db.prepare('UPDATE posts SET reposted_as = ? WHERE id = ?').run(postId, originalPostId);
+    } catch (_) { /* original may have been deleted; non-fatal */ }
+  }
 
   for (const platform of platforms) {
     if (platform === 'google') {

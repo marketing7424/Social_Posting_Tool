@@ -160,6 +160,9 @@ export default function ManagePosts() {
   // Failure banner dismissal (per-session)
   const [failureBannerDismissed, setFailureBannerDismissed] = useState(false);
 
+  // Highlighted row (used when jumping from "View repost →" link)
+  const [highlightedPostId, setHighlightedPostId] = useState(null);
+
   // Unique creators for "Posted by" filter
   const [creators, setCreators] = useState([]);
 
@@ -228,6 +231,36 @@ export default function ManagePosts() {
   const handleFilterChange = (key, value) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
   };
+
+  // Scroll to and briefly highlight a post row (used by the Reposted → link).
+  // If the post isn't in the current view, widen filters first so it shows up.
+  const jumpToPost = (postId) => {
+    if (!postId) return;
+    const inView = posts.some(p => p.id === postId);
+    if (!inView) {
+      // Clear restrictive filters so the linked post is fetchable, then jump
+      // once it lands in `posts` (handled by the effect below).
+      setFilters(prev => ({
+        ...prev,
+        status: undefined,
+        exclude_statuses: [],
+        date_from: dayjs().subtract(6, 'month').format('YYYY-MM-DD'),
+        date_to: dayjs().format('YYYY-MM-DD'),
+      }));
+    }
+    setHighlightedPostId(postId);
+  };
+
+  // When the highlighted post lands in the current page, scroll it into view
+  // and clear the highlight after ~2.5s.
+  useEffect(() => {
+    if (!highlightedPostId) return;
+    if (!posts.some(p => p.id === highlightedPostId)) return;
+    const el = document.querySelector(`[data-row-key="${highlightedPostId}"]`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const t = setTimeout(() => setHighlightedPostId(null), 2500);
+    return () => clearTimeout(t);
+  }, [highlightedPostId, posts]);
 
   const clearFilters = () => {
     setFilters({ merchant: undefined, platform: undefined, status: undefined, created_by: undefined, exclude_statuses: DEFAULT_EXCLUDE, date_from: dayjs().subtract(2, 'month').format('YYYY-MM-DD'), date_to: dayjs().format('YYYY-MM-DD') });
@@ -467,6 +500,7 @@ export default function ManagePosts() {
         })),
         fbLayout: repostingPost.fb_layout || 'collage',
         scheduledTime,
+        originalPostId: repostingPost.id,
       });
 
       if (scheduledTime) {
@@ -574,7 +608,7 @@ export default function ManagePosts() {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      width: 140,
+      width: 160,
       render: (status, record) => {
         if (status === 'deleted') {
           const prevCfg = STATUS_CONFIG[record.previous_status] || null;
@@ -590,6 +624,39 @@ export default function ManagePosts() {
           );
         }
         const cfg = STATUS_CONFIG[status] || { color: 'default', text: status };
+        // If this post was reposted, show a "Reposted →" link below the status
+        if (record.reposted_as) {
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <Badge color={cfg.color} text={cfg.text} />
+              <a
+                onClick={(e) => {
+                  e.preventDefault();
+                  jumpToPost(record.reposted_as);
+                }}
+                style={{ fontSize: 11, color: '#16A34A', fontWeight: 600 }}
+              >
+                Reposted ✓ →
+              </a>
+            </div>
+          );
+        }
+        if (record.original_post_id) {
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <Badge color={cfg.color} text={cfg.text} />
+              <a
+                onClick={(e) => {
+                  e.preventDefault();
+                  jumpToPost(record.original_post_id);
+                }}
+                style={{ fontSize: 11, color: '#64748B' }}
+              >
+                ← Repost of original
+              </a>
+            </div>
+          );
+        }
         return <Badge color={cfg.color} text={cfg.text} />;
       },
     },
@@ -858,6 +925,8 @@ export default function ManagePosts() {
           if (p.status !== 'failed' && p.status !== 'partial') return false;
           // Only count posts created in the last 14 days
           if (p.created_at && dayjs(p.created_at).isBefore(twoWeeksAgo)) return false;
+          // Already reposted — user has dealt with it
+          if (p.reposted_as) return false;
           // Must have at least one real (not just "not connected") failure
           return (p.platforms || []).some(pp =>
             pp.status === 'failed' && !isNotConnectedError(pp.error)
@@ -915,6 +984,7 @@ export default function ManagePosts() {
         dataSource={posts}
         loading={loading}
         rowSelection={rowSelection}
+        rowClassName={(record) => record.id === highlightedPostId ? 'mp-row-highlight' : ''}
         pagination={{
           defaultPageSize: 20,
           showSizeChanger: true,

@@ -105,3 +105,12 @@ textarea {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Briefly highlight a row when jumping from a Reposted → link */
+.mp-row-highlight > td {
+  animation: mpRowFlash 2.5s ease-out;
+}
+@keyframes mpRowFlash {
+  0%, 30% { background-color: #FEF3C7; }
+  100%    { background-color: transparent; }
+}
