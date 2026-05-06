@@ -65,6 +65,8 @@ export const publishPost = (id) => api.post(`/posts/${id}/publish`).then(r => r.
 export const getPostStatus = (id) => api.get(`/posts/${id}/status`).then(r => r.data);
 export const schedulePost = (id, scheduledTime) => api.post(`/posts/${id}/schedule`, { scheduledTime }).then(r => r.data);
 export const retryPost = (id) => api.post(`/posts/${id}/retry`).then(r => r.data);
+export const linkRepostOriginal = (id, originalPostId) => api.post(`/posts/${id}/link-original`, { originalPostId }).then(r => r.data);
+export const unlinkRepostOriginal = (id) => api.delete(`/posts/${id}/link-original`).then(r => r.data);
 
 // Media
 export const uploadMedia = (formData) => api.post('/media/upload', formData, {

@@ -46,6 +46,8 @@ import {
   regenerateCaption,
   uploadMedia,
   deleteMedia,
+  linkRepostOriginal,
+  unlinkRepostOriginal,
 } from '../api/client';
 
 const QUICK_SUGGESTIONS = [
@@ -163,6 +165,12 @@ export default function ManagePosts() {
   // Highlighted row (used when jumping from "View repost →" link)
   const [highlightedPostId, setHighlightedPostId] = useState(null);
 
+  // Repost-link picker modal
+  const [linkPickerPostId, setLinkPickerPostId] = useState(null);
+  const [linkPickerSaving, setLinkPickerSaving] = useState(false);
+  const [linkPickerCandidates, setLinkPickerCandidates] = useState([]);
+  const [linkPickerLoading, setLinkPickerLoading] = useState(false);
+
   // Unique creators for "Posted by" filter
   const [creators, setCreators] = useState([]);
 
@@ -250,6 +258,31 @@ export default function ManagePosts() {
     }
     setHighlightedPostId(postId);
   };
+
+  // Load failed-post candidates when the link picker opens
+  useEffect(() => {
+    if (!linkPickerPostId) {
+      setLinkPickerCandidates([]);
+      return;
+    }
+    let cancelled = false;
+    setLinkPickerLoading(true);
+    getPosts({
+      status: 'failed',
+      date_from: dayjs().subtract(14, 'day').startOf('day').utc().format('YYYY-MM-DD HH:mm:ss'),
+      date_to: dayjs().endOf('day').utc().format('YYYY-MM-DD HH:mm:ss'),
+      exclude_statuses: '',
+    }).then(data => {
+      if (cancelled) return;
+      const list = Array.isArray(data) ? data : data?.posts || [];
+      setLinkPickerCandidates(list);
+    }).catch(() => {
+      if (!cancelled) message.error('Failed to load failed posts');
+    }).finally(() => {
+      if (!cancelled) setLinkPickerLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [linkPickerPostId]);
 
   // When the highlighted post lands in the current page, scroll it into view
   // and clear the highlight after ~2.5s.
@@ -630,25 +663,44 @@ export default function ManagePosts() {
     {
       title: 'Repost',
       key: 'repost',
-      width: 130,
+      width: 150,
       render: (_, record) => {
-        // Row is a repost — link back to the original failed/partial post
+        // Row is a repost → click to jump to the original failed post; offer unlink
         if (record.original_post_id) {
           return (
-            <Tooltip title="Click to jump to the original failed/partial post">
-              <a
-                onClick={(e) => {
-                  e.preventDefault();
-                  jumpToPost(record.original_post_id);
-                }}
-                style={{ fontSize: 12, color: '#2563EB', fontWeight: 600 }}
-              >
-                ← Original
-              </a>
-            </Tooltip>
+            <Space size={4}>
+              <Tooltip title="Jump to the original failed post">
+                <a
+                  onClick={(e) => {
+                    e.preventDefault();
+                    jumpToPost(record.original_post_id);
+                  }}
+                  style={{ fontSize: 12, color: '#2563EB', fontWeight: 600 }}
+                >
+                  ← Original
+                </a>
+              </Tooltip>
+              <Tooltip title="Unlink">
+                <a
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    try {
+                      await unlinkRepostOriginal(record.id);
+                      message.success('Unlinked');
+                      fetchPosts();
+                    } catch {
+                      message.error('Failed to unlink');
+                    }
+                  }}
+                  style={{ fontSize: 11, color: '#94A3B8' }}
+                >
+                  ✕
+                </a>
+              </Tooltip>
+            </Space>
           );
         }
-        // Row has been reposted — link forward to the new repost
+        // Row has been reposted → jump to the new repost
         if (record.reposted_as) {
           return (
             <Tooltip title="Already reposted — click to jump to the repost">
@@ -664,7 +716,26 @@ export default function ManagePosts() {
             </Tooltip>
           );
         }
-        return null;
+        // Don't offer "link to failed" on the failed posts themselves, drafts,
+        // scheduled posts, or deleted posts — only on regular published posts
+        // that could plausibly be a manual repost.
+        if (record.status === 'failed' || record.status === 'deleted' ||
+            record.status === 'draft' || record.status === 'scheduled' ||
+            record.status === 'pending' || record.status === 'publishing') {
+          return null;
+        }
+        return (
+          <Tooltip title="Mark this post as a repost of an earlier failed post">
+            <Button
+              type="link"
+              size="small"
+              style={{ padding: 0, fontSize: 12 }}
+              onClick={() => setLinkPickerPostId(record.id)}
+            >
+              + Link to failed
+            </Button>
+          </Tooltip>
+        );
       },
     },
     {
@@ -925,13 +996,15 @@ export default function ManagePosts() {
         </Card>
       )}
 
-      {/* Failure summary banner — only real failures from the last 14 days */}
+      {/* Failure summary banner — only real "failed" posts from the last 14 days */}
       {(() => {
         const twoWeeksAgo = dayjs().subtract(14, 'day');
         const failedPosts = posts.filter(p => {
-          if (p.status !== 'failed' && p.status !== 'partial') return false;
+          if (p.status !== 'failed') return false;
           // Only count posts created in the last 14 days
           if (p.created_at && dayjs(p.created_at).isBefore(twoWeeksAgo)) return false;
+          // Already reposted → user has dealt with it
+          if (p.reposted_as) return false;
           // Must have at least one real (not just "not connected") failure
           return (p.platforms || []).some(pp =>
             pp.status === 'failed' && !isNotConnectedError(pp.error)
@@ -956,7 +1029,7 @@ export default function ManagePosts() {
             closable
             onClose={() => setFailureBannerDismissed(true)}
             style={{ marginBottom: 12 }}
-            message={`${failedPosts.length} post${failedPosts.length > 1 ? 's' : ''} need attention (last 14 days)`}
+            message={`${failedPosts.length} failed post${failedPosts.length > 1 ? 's' : ''} need attention (last 14 days)`}
             description={
               <span>
                 {summary ? `${summary} failed in the last 14 days. ` : 'One or more platforms failed. '}
@@ -966,15 +1039,13 @@ export default function ManagePosts() {
                   style={{ padding: 0 }}
                   onClick={() => setFilters(prev => ({
                     ...prev,
-                    status: undefined,
-                    // Exclude every status EXCEPT failed and partial so the table
-                    // shows only the rows the banner is calling out.
-                    exclude_statuses: ['draft', 'pending', 'scheduled', 'publishing', 'success', 'deleted'],
+                    status: 'failed',
+                    exclude_statuses: undefined,
                     date_from: dayjs().subtract(14, 'day').format('YYYY-MM-DD'),
                     date_to: dayjs().format('YYYY-MM-DD'),
                   }))}
                 >
-                  Show only failed/partial
+                  Show only failed
                 </Button>
               </span>
             }
@@ -1334,6 +1405,84 @@ export default function ManagePosts() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Link-to-failed-post picker */}
+      <Modal
+        title="Link to a failed post"
+        open={!!linkPickerPostId}
+        onCancel={() => setLinkPickerPostId(null)}
+        footer={null}
+        width={600}
+      >
+        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
+          Pick the failed post that this post is fixing. Only failed posts from the last 14 days are shown.
+        </Text>
+        {(() => {
+          if (linkPickerLoading) {
+            return <Text type="secondary">Loading failed posts…</Text>;
+          }
+          const candidates = linkPickerCandidates.filter(p => {
+            if (p.id === linkPickerPostId) return false;
+            if (p.reposted_as) return false;
+            return (p.platforms || []).some(pp =>
+              pp.status === 'failed' && !isNotConnectedError(pp.error)
+            );
+          });
+          if (candidates.length === 0) {
+            return <Text type="secondary">No failed posts in the last 14 days that aren't already linked.</Text>;
+          }
+          return (
+            <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+              {candidates.map(c => {
+                const merch = getMerchantName(c.merchant_mid);
+                const cap = (c.platforms?.[0]?.caption || '').slice(0, 80);
+                return (
+                  <div
+                    key={c.id}
+                    style={{
+                      padding: 10, borderRadius: 6, border: '1px solid #E2E8F0',
+                      marginBottom: 8, cursor: linkPickerSaving ? 'wait' : 'pointer',
+                      background: '#fff',
+                    }}
+                    onClick={async () => {
+                      if (linkPickerSaving) return;
+                      setLinkPickerSaving(true);
+                      try {
+                        await linkRepostOriginal(linkPickerPostId, c.id);
+                        message.success('Linked');
+                        setLinkPickerPostId(null);
+                        fetchPosts();
+                      } catch {
+                        message.error('Failed to link');
+                      } finally {
+                        setLinkPickerSaving(false);
+                      }
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <Text strong style={{ fontSize: 13 }}>{merch}</Text>
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        {dayjs(c.created_at).format('MMM D, YYYY h:mm A')}
+                      </Text>
+                    </div>
+                    <Space size={4} wrap style={{ marginBottom: 4 }}>
+                      {(c.platforms || []).map(pp => (
+                        <Tag key={pp.platform} color={PLATFORM_COLORS[pp.platform] || 'default'} style={{ marginInlineEnd: 0 }}>
+                          {pp.platform.charAt(0).toUpperCase() + pp.platform.slice(1)}
+                          {pp.status === 'failed' && !isNotConnectedError(pp.error) ? ' ✗' : ''}
+                        </Tag>
+                      ))}
+                    </Space>
+                    <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+                      {cap || <em>(no caption)</em>}
+                    </Text>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
       </Modal>
     </div>
   );

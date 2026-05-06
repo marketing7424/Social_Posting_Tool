@@ -144,6 +144,41 @@ router.get('/:id', (req, res) => {
   res.json({ ...post, platforms, media });
 });
 
+// POST /api/posts/:id/link-original — manually mark this post as a repost of another
+router.post('/:id/link-original', (req, res) => {
+  const db = getDb();
+  const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(req.params.id);
+  if (!post) return res.status(404).json({ error: 'Post not found' });
+
+  const { originalPostId } = req.body || {};
+  if (!originalPostId) return res.status(400).json({ error: 'originalPostId is required' });
+  if (originalPostId === post.id) return res.status(400).json({ error: 'Cannot link a post to itself' });
+
+  const original = db.prepare('SELECT id FROM posts WHERE id = ?').get(originalPostId);
+  if (!original) return res.status(404).json({ error: 'Original post not found' });
+
+  // Clear any prior reverse-link on whoever was previously claiming this original
+  try { db.prepare("UPDATE posts SET reposted_as = '' WHERE reposted_as = ?").run(originalPostId); } catch (_) {}
+
+  db.prepare('UPDATE posts SET original_post_id = ? WHERE id = ?').run(originalPostId, post.id);
+  db.prepare('UPDATE posts SET reposted_as = ? WHERE id = ?').run(post.id, originalPostId);
+
+  const updated = db.prepare('SELECT * FROM posts WHERE id = ?').get(post.id);
+  res.json(updated);
+});
+
+// DELETE /api/posts/:id/link-original — remove the repost link
+router.delete('/:id/link-original', (req, res) => {
+  const db = getDb();
+  const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(req.params.id);
+  if (!post) return res.status(404).json({ error: 'Post not found' });
+  if (post.original_post_id) {
+    db.prepare("UPDATE posts SET reposted_as = '' WHERE id = ?").run(post.original_post_id);
+  }
+  db.prepare("UPDATE posts SET original_post_id = '' WHERE id = ?").run(post.id);
+  res.json({ ok: true });
+});
+
 // PATCH /api/posts/:id
 router.patch('/:id', (req, res) => {
   const db = getDb();
