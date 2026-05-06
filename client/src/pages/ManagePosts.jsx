@@ -608,7 +608,7 @@ export default function ManagePosts() {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      width: 160,
+      width: 140,
       render: (status, record) => {
         if (status === 'deleted') {
           const prevCfg = STATUS_CONFIG[record.previous_status] || null;
@@ -624,40 +624,28 @@ export default function ManagePosts() {
           );
         }
         const cfg = STATUS_CONFIG[status] || { color: 'default', text: status };
-        // If this post was reposted, show a "Reposted →" link below the status
-        if (record.reposted_as) {
-          return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <Badge color={cfg.color} text={cfg.text} />
-              <a
-                onClick={(e) => {
-                  e.preventDefault();
-                  jumpToPost(record.reposted_as);
-                }}
-                style={{ fontSize: 11, color: '#16A34A', fontWeight: 600 }}
-              >
-                Reposted ✓ →
-              </a>
-            </div>
-          );
-        }
-        if (record.original_post_id) {
-          return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <Badge color={cfg.color} text={cfg.text} />
-              <a
-                onClick={(e) => {
-                  e.preventDefault();
-                  jumpToPost(record.original_post_id);
-                }}
-                style={{ fontSize: 11, color: '#64748B' }}
-              >
-                ← Repost of original
-              </a>
-            </div>
-          );
-        }
         return <Badge color={cfg.color} text={cfg.text} />;
+      },
+    },
+    {
+      title: 'Repost',
+      key: 'repost',
+      width: 110,
+      render: (_, record) => {
+        if (!record.original_post_id) return null;
+        return (
+          <Tooltip title="Click to jump to the original failed/partial post">
+            <a
+              onClick={(e) => {
+                e.preventDefault();
+                jumpToPost(record.original_post_id);
+              }}
+              style={{ fontSize: 12, color: '#2563EB', fontWeight: 600 }}
+            >
+              Repost ↗
+            </a>
+          </Tooltip>
+        );
       },
     },
     {
@@ -925,8 +913,6 @@ export default function ManagePosts() {
           if (p.status !== 'failed' && p.status !== 'partial') return false;
           // Only count posts created in the last 14 days
           if (p.created_at && dayjs(p.created_at).isBefore(twoWeeksAgo)) return false;
-          // Already reposted — user has dealt with it
-          if (p.reposted_as) return false;
           // Must have at least one real (not just "not connected") failure
           return (p.platforms || []).some(pp =>
             pp.status === 'failed' && !isNotConnectedError(pp.error)
