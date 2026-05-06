@@ -15,6 +15,7 @@ import {
   Tooltip,
   Checkbox,
   DatePicker,
+  Alert,
 } from 'antd';
 import {
   ReloadOutlined,
@@ -58,6 +59,7 @@ const QUICK_SUGGESTIONS = [
   { label: 'Urgent CTA', value: 'Add urgency and a stronger call-to-action' },
 ];
 import SearchableSelect from '../components/merchants/SearchableSelect';
+import MediaGrid from '../components/media/MediaGrid';
 import { appendHashtags } from '../utils/hashtags';
 
 const { TextArea } = Input;
@@ -144,6 +146,9 @@ export default function ManagePosts() {
   const [adjustFeedback, setAdjustFeedback] = useState('');
   const [repostPlatforms, setRepostPlatforms] = useState([]);
 
+  // Failure banner dismissal (per-session)
+  const [failureBannerDismissed, setFailureBannerDismissed] = useState(false);
+
   // Unique creators for "Posted by" filter
   const [creators, setCreators] = useState([]);
 
@@ -197,6 +202,15 @@ export default function ManagePosts() {
   useEffect(() => {
     setSelectedRowKeys([]);
   }, [posts]);
+
+  // Re-show failure banner when the set of failed/partial posts changes
+  const failedPostsKey = posts
+    .filter(p => p.status === 'failed' || p.status === 'partial')
+    .map(p => p.id)
+    .join(',');
+  useEffect(() => {
+    setFailureBannerDismissed(false);
+  }, [failedPostsKey]);
 
   // --- Filter handlers ---
 
@@ -498,12 +512,30 @@ export default function ManagePosts() {
             {list.map((p) => {
               const name = typeof p === 'string' ? p : p.platform;
               const status = typeof p === 'object' ? p.status : null;
-              return (
-                <Tag key={name} color={PLATFORM_COLORS[name] || 'default'}>
+              const error = typeof p === 'object' ? p.error : null;
+              const tag = (
+                <Tag key={name} color={PLATFORM_COLORS[name] || 'default'} style={{ marginInlineEnd: 0 }}>
                   {name.charAt(0).toUpperCase() + name.slice(1)}
-                  {status === 'failed' ? ' ✗' : status === 'success' ? ' ✓' : ''}
+                  {status === 'failed' ? (
+                    <span style={{
+                      color: '#fff', background: '#DC2626', borderRadius: 3,
+                      padding: '0 4px', marginLeft: 4, fontWeight: 700, fontSize: 11,
+                    }}>✗</span>
+                  ) : status === 'success' ? ' ✓' : ''}
                 </Tag>
               );
+              if (status === 'failed') {
+                return (
+                  <Tooltip
+                    key={name}
+                    title={error || 'Failed to publish'}
+                    overlayStyle={{ maxWidth: 360 }}
+                  >
+                    {tag}
+                  </Tooltip>
+                );
+              }
+              return tag;
             })}
           </Space>
         );
@@ -790,6 +822,46 @@ export default function ManagePosts() {
         </Card>
       )}
 
+      {/* Failure summary banner */}
+      {(() => {
+        const failedPosts = posts.filter(p => p.status === 'failed' || p.status === 'partial');
+        if (!failedPosts.length || failureBannerDismissed) return null;
+        const platformCounts = {};
+        failedPosts.forEach(post => {
+          (post.platforms || []).forEach(pp => {
+            if (pp.status === 'failed') {
+              platformCounts[pp.platform] = (platformCounts[pp.platform] || 0) + 1;
+            }
+          });
+        });
+        const summary = Object.entries(platformCounts)
+          .map(([plat, n]) => `${n} ${plat.charAt(0).toUpperCase() + plat.slice(1)}`)
+          .join(', ');
+        return (
+          <Alert
+            type="warning"
+            showIcon
+            closable
+            onClose={() => setFailureBannerDismissed(true)}
+            style={{ marginBottom: 12 }}
+            message={`${failedPosts.length} post${failedPosts.length > 1 ? 's' : ''} need attention`}
+            description={
+              <span>
+                {summary ? `${summary} failed in the current view. ` : 'One or more platforms failed. '}
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ padding: 0 }}
+                  onClick={() => handleFilterChange('status', ['failed', 'partial'])}
+                >
+                  Show only failed/partial
+                </Button>
+              </span>
+            }
+          />
+        );
+      })()}
+
       {/* Posts Table */}
       <Table
         rowKey="id"
@@ -958,27 +1030,18 @@ export default function ManagePosts() {
             {/* Media */}
             <div style={{ marginBottom: 16 }}>
               <Text strong style={{ display: 'block', marginBottom: 8, fontSize: 13 }}>Media</Text>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                {repostMedia.map((file, i) => (
-                  <div key={file.filename} style={{
-                    padding: '4px 10px', borderRadius: 6, fontSize: 12,
-                    background: '#F0F5FF', border: '1px solid #BFDBFE',
-                    display: 'flex', alignItems: 'center', gap: 6,
-                  }}>
-                    <span>{file.mimetype?.startsWith('video/') ? '🎬' : '🖼️'}</span>
-                    <span style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {file.originalName || file.filename}
-                    </span>
-                    <span
-                      onClick={() => setRepostMedia(prev => prev.filter((_, idx) => idx !== i))}
-                      style={{ cursor: 'pointer', color: '#94A3B8', fontSize: 14 }}
-                    >&times;</span>
-                  </div>
-                ))}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                <MediaGrid
+                  files={repostMedia}
+                  onReorder={(newFiles) => setRepostMedia(newFiles)}
+                  onDelete={(filename) => setRepostMedia(prev => prev.filter(f => f.filename !== filename))}
+                />
                 <label style={{
-                  padding: '4px 12px', borderRadius: 6, fontSize: 12,
+                  width: 100, height: 100, borderRadius: 8, fontSize: 12,
                   border: '1.5px dashed #CBD5E1', cursor: 'pointer',
                   color: '#64748B', background: '#F8FAFC',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  textAlign: 'center', flexShrink: 0,
                 }}>
                   {repostUploading ? 'Uploading...' : '+ Add media'}
                   <input
