@@ -78,6 +78,17 @@ const STATUS_CONFIG = {
 
 import { PLATFORM_TAG_COLORS as PLATFORM_COLORS } from '../constants/platforms';
 
+// True when a publish failure is just because the platform isn't connected
+// to the merchant — not a real publishing error the user should worry about.
+function isNotConnectedError(err) {
+  if (!err) return false;
+  const s = String(err).toLowerCase();
+  return s.includes('credentials not configured') ||
+    s.includes('missing credentials') ||
+    s.includes('no token') ||
+    s.includes('not configured');
+}
+
 const PLATFORM_OPTIONS = [
   { label: 'Facebook', value: 'facebook' },
   { label: 'Instagram', value: 'instagram' },
@@ -503,7 +514,7 @@ export default function ManagePosts() {
       title: 'Platforms',
       dataIndex: 'platforms',
       key: 'platforms',
-      width: 200,
+      width: 220,
       render: (platforms) => {
         if (!platforms) return '—';
         const list = Array.isArray(platforms) ? platforms : [platforms];
@@ -513,22 +524,40 @@ export default function ManagePosts() {
               const name = typeof p === 'string' ? p : p.platform;
               const status = typeof p === 'object' ? p.status : null;
               const error = typeof p === 'object' ? p.error : null;
+              const notConnected = status === 'failed' && isNotConnectedError(error);
+              const realFailure = status === 'failed' && !notConnected;
               const tag = (
                 <Tag key={name} color={PLATFORM_COLORS[name] || 'default'} style={{ marginInlineEnd: 0 }}>
                   {name.charAt(0).toUpperCase() + name.slice(1)}
-                  {status === 'failed' ? (
+                  {realFailure ? (
                     <span style={{
                       color: '#fff', background: '#DC2626', borderRadius: 3,
                       padding: '0 4px', marginLeft: 4, fontWeight: 700, fontSize: 11,
                     }}>✗</span>
+                  ) : notConnected ? (
+                    <span style={{
+                      color: '#475569', background: '#E2E8F0', borderRadius: 3,
+                      padding: '0 4px', marginLeft: 4, fontWeight: 600, fontSize: 10,
+                    }}>not connected</span>
                   ) : status === 'success' ? ' ✓' : ''}
                 </Tag>
               );
-              if (status === 'failed') {
+              if (realFailure) {
                 return (
                   <Tooltip
                     key={name}
                     title={error || 'Failed to publish'}
+                    overlayStyle={{ maxWidth: 360 }}
+                  >
+                    {tag}
+                  </Tooltip>
+                );
+              }
+              if (notConnected) {
+                return (
+                  <Tooltip
+                    key={name}
+                    title={`${name.charAt(0).toUpperCase() + name.slice(1)} isn't connected for this merchant — connect it in the merchant settings to publish here.`}
                     overlayStyle={{ maxWidth: 360 }}
                   >
                     {tag}
@@ -822,14 +851,23 @@ export default function ManagePosts() {
         </Card>
       )}
 
-      {/* Failure summary banner */}
+      {/* Failure summary banner — only real failures from the last 14 days */}
       {(() => {
-        const failedPosts = posts.filter(p => p.status === 'failed' || p.status === 'partial');
+        const twoWeeksAgo = dayjs().subtract(14, 'day');
+        const failedPosts = posts.filter(p => {
+          if (p.status !== 'failed' && p.status !== 'partial') return false;
+          // Only count posts created in the last 14 days
+          if (p.created_at && dayjs(p.created_at).isBefore(twoWeeksAgo)) return false;
+          // Must have at least one real (not just "not connected") failure
+          return (p.platforms || []).some(pp =>
+            pp.status === 'failed' && !isNotConnectedError(pp.error)
+          );
+        });
         if (!failedPosts.length || failureBannerDismissed) return null;
         const platformCounts = {};
         failedPosts.forEach(post => {
           (post.platforms || []).forEach(pp => {
-            if (pp.status === 'failed') {
+            if (pp.status === 'failed' && !isNotConnectedError(pp.error)) {
               platformCounts[pp.platform] = (platformCounts[pp.platform] || 0) + 1;
             }
           });
@@ -844,15 +882,23 @@ export default function ManagePosts() {
             closable
             onClose={() => setFailureBannerDismissed(true)}
             style={{ marginBottom: 12 }}
-            message={`${failedPosts.length} post${failedPosts.length > 1 ? 's' : ''} need attention`}
+            message={`${failedPosts.length} post${failedPosts.length > 1 ? 's' : ''} need attention (last 14 days)`}
             description={
               <span>
-                {summary ? `${summary} failed in the current view. ` : 'One or more platforms failed. '}
+                {summary ? `${summary} failed in the last 14 days. ` : 'One or more platforms failed. '}
                 <Button
                   type="link"
                   size="small"
                   style={{ padding: 0 }}
-                  onClick={() => handleFilterChange('status', ['failed', 'partial'])}
+                  onClick={() => setFilters(prev => ({
+                    ...prev,
+                    status: undefined,
+                    // Exclude every status EXCEPT failed and partial so the table
+                    // shows only the rows the banner is calling out.
+                    exclude_statuses: ['draft', 'pending', 'scheduled', 'publishing', 'success', 'deleted'],
+                    date_from: dayjs().subtract(14, 'day').format('YYYY-MM-DD'),
+                    date_to: dayjs().format('YYYY-MM-DD'),
+                  }))}
                 >
                   Show only failed/partial
                 </Button>
