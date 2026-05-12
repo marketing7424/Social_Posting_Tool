@@ -84,6 +84,9 @@ export const getMetaPages = (mid) => api.get(`/oauth/meta/pages/${mid}`).then(r 
 export const selectMetaPage = (mid, pageId) => api.post(`/oauth/meta/select-page/${mid}`, { pageId }).then(r => r.data);
 export const getGoogleLocations = (mid) => api.get(`/oauth/google/locations/${mid}`).then(r => r.data);
 export const selectGoogleLocation = (mid, locationName) => api.post(`/oauth/google/select-location/${mid}`, { locationName }).then(r => r.data);
+// Bulk Google reconnect (admin)
+export const getGoogleBulkPreview = () => api.get('/oauth/google/bulk-preview').then(r => r.data);
+export const applyGoogleBulkReconnect = (mids) => api.post('/oauth/google/bulk-apply', { mids }).then(r => r.data);
 
 // Analytics
 export const getAnalytics = (mid, period = 30) => api.get(`/analytics/${mid}?period=${period}`).then(r => r.data);

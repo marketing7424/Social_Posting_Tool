@@ -31,6 +31,7 @@ import {
   updateMerchant,
   deleteMerchant,
 } from '../api/client';
+import { useAuth } from '../context/AuthContext';
 import PhoneInput from '../components/merchants/PhoneInput';
 
 const { Title } = Typography;
@@ -80,6 +81,7 @@ const platformDot = (connected, platformKey, tokenCreatedAt) => {
 
 export default function Clients() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [merchants, setMerchants] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
@@ -257,9 +259,16 @@ export default function Clients() {
         align="center"
       >
         <Title level={3} style={{ margin: 0 }}>Clients</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openAddModal}>
-          Add Merchant
-        </Button>
+        <Space>
+          {user?.role === 'admin' && (
+            <Button icon={<GoogleOutlined />} onClick={() => navigate('/bulk-reconnect')}>
+              Reconnect Google
+            </Button>
+          )}
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAddModal}>
+            Add Merchant
+          </Button>
+        </Space>
       </Space>
 
       <Input.Search

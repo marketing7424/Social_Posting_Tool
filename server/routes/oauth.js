@@ -7,9 +7,12 @@ const {
   testFacebookConnection,
   testInstagramConnection,
   getGoogleAuthorizeUrl,
+  getGoogleBulkAuthorizeUrl,
   handleGoogleCallback,
+  handleGoogleBulkCallback,
   selectGoogleLocation,
   testGoogleConnection,
+  BULK_OAUTH_STATE,
 } = require('../services/oauth');
 const { getDb } = require('../services/db');
 
@@ -142,14 +145,37 @@ router.get('/google/authorize/:mid', (req, res) => {
   }
 });
 
+// GET /api/oauth/google/bulk-authorize - start a bulk reconnect (one login, many merchants)
+router.get('/google/bulk-authorize', (req, res) => {
+  try {
+    const url = getGoogleBulkAuthorizeUrl();
+    res.redirect(url);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to start Google OAuth: ' + err.message });
+  }
+});
+
 // GET /api/oauth/google/callback
 router.get('/google/callback', async (req, res) => {
   const frontendUrl = getFrontendUrl();
+  const { code, state, error } = req.query;
+  const isBulk = state === BULK_OAUTH_STATE;
+
+  if (error) {
+    return isBulk
+      ? res.redirect(`${frontendUrl}/bulk-reconnect?oauth_error=${encodeURIComponent(error)}`)
+      : res.redirect(`${frontendUrl}/settings/${state || ''}?oauth_error=${encodeURIComponent(error)}`);
+  }
+
   try {
-    const { code, state: mid, error } = req.query;
-    if (error) {
-      return res.redirect(`${frontendUrl}/settings/${mid}?oauth_error=${encodeURIComponent(error)}`);
+    if (isBulk) {
+      const result = await handleGoogleBulkCallback(code);
+      pendingOAuth.set(BULK_OAUTH_STATE, result);
+      setTimeout(() => pendingOAuth.delete(BULK_OAUTH_STATE), 10 * 60 * 1000);
+      return res.redirect(`${frontendUrl}/bulk-reconnect?ready=1`);
     }
+
+    const mid = state;
     const result = await handleGoogleCallback(code, mid);
 
     if (result.autoSelected) {
@@ -163,8 +189,9 @@ router.get('/google/callback', async (req, res) => {
     }
   } catch (err) {
     console.error('[oauth] Google callback error:', err.message);
-    const mid = req.query.state || '';
-    res.redirect(`${frontendUrl}/settings/${mid}?oauth_error=${encodeURIComponent(err.message)}`);
+    return isBulk
+      ? res.redirect(`${frontendUrl}/bulk-reconnect?oauth_error=${encodeURIComponent(err.message)}`)
+      : res.redirect(`${frontendUrl}/settings/${state || ''}?oauth_error=${encodeURIComponent(err.message)}`);
   }
 });
 
@@ -198,6 +225,86 @@ router.post('/google/select-location/:mid', (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// --- Bulk Google reconnect ---
+
+// Match a merchant's stored location id against the locations the authorizing
+// account can manage. Stored ids look like `accounts/X/locations/Y`; the bulk
+// list returns the same shape, but fall back to comparing the `locations/Y`
+// tail in case of historical formatting differences.
+function locationMatches(storedId, fetchedLocations) {
+  if (!storedId) return false;
+  if (fetchedLocations.some(l => l.name === storedId)) return true;
+  const tail = storedId.split('/').slice(-2).join('/'); // "locations/Y"
+  return fetchedLocations.some(l => (l.name || '').endsWith(tail));
+}
+
+function tokenAgeDays(createdAt) {
+  if (!createdAt) return null;
+  const t = Date.parse(createdAt);
+  if (Number.isNaN(t)) return null;
+  return Math.floor((Date.now() - t) / (24 * 60 * 60 * 1000));
+}
+
+// GET /api/oauth/google/bulk-preview - which merchants this Google login can reconnect
+router.get('/google/bulk-preview', (req, res) => {
+  const data = pendingOAuth.get(BULK_OAUTH_STATE);
+  if (!data) {
+    return res.status(404).json({ error: 'Google session expired. Connect a Google account again.' });
+  }
+
+  const db = getDb();
+  const rows = db.prepare("SELECT * FROM merchants WHERE google_location_id IS NOT NULL AND google_location_id != ''").all();
+
+  const matched = [];
+  const unmatched = [];
+  for (const row of rows) {
+    const entry = {
+      mid: row.mid,
+      dbaName: row.dba_name,
+      googleLocationId: row.google_location_id,
+      googleLocationName: row.google_location_name || '',
+      tokenAgeDays: tokenAgeDays(row.google_token_created_at),
+    };
+    if (locationMatches(row.google_location_id, data.locations)) matched.push(entry);
+    else unmatched.push(entry);
+  }
+
+  res.json({
+    locationCount: (data.locations || []).length,
+    matched,
+    unmatched,
+  });
+});
+
+// POST /api/oauth/google/bulk-apply - attach the new refresh token to chosen merchants
+router.post('/google/bulk-apply', (req, res) => {
+  const data = pendingOAuth.get(BULK_OAUTH_STATE);
+  if (!data) {
+    return res.status(404).json({ error: 'Google session expired. Connect a Google account again.' });
+  }
+
+  const mids = Array.isArray(req.body?.mids) ? req.body.mids : [];
+  if (mids.length === 0) return res.status(400).json({ error: 'No merchants selected' });
+
+  const db = getDb();
+  let updated = 0;
+  const skipped = [];
+  for (const mid of mids) {
+    const row = db.prepare('SELECT * FROM merchants WHERE mid = ?').get(mid);
+    if (!row) { skipped.push({ mid, reason: 'not found' }); continue; }
+    if (!locationMatches(row.google_location_id, data.locations)) {
+      skipped.push({ mid, reason: 'location not under this account' });
+      continue;
+    }
+    selectGoogleLocation(mid, data.refreshToken, row.google_location_id, row.google_location_name || '');
+    updated++;
+  }
+
+  // Keep the pending data so the user can run another batch from the same login
+  // (it self-expires after 10 minutes).
+  res.json({ updated, skipped });
 });
 
 // POST /api/oauth/test/:mid - Test all platform connections for a merchant

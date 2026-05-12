@@ -8,6 +8,7 @@ import {
   UserOutlined,
   CloudUploadOutlined,
   SendOutlined,
+  GoogleOutlined,
 } from '@ant-design/icons';
 import { lazy, Suspense, useMemo } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -18,6 +19,7 @@ const BulkSchedule = lazy(() => import('./pages/BulkSchedule'));
 const Clients = lazy(() => import('./pages/Clients'));
 const MerchantSettings = lazy(() => import('./pages/MerchantSettings'));
 const Users = lazy(() => import('./pages/Users'));
+const BulkReconnectGoogle = lazy(() => import('./pages/BulkReconnectGoogle'));
 const Login = lazy(() => import('./pages/Login'));
 
 const { Header, Content, Sider } = Layout;
@@ -29,6 +31,7 @@ const PAGE_TITLES = {
   '/bulk': 'Bulk Schedule',
   '/posts': 'Manage Posts',
   '/clients': 'Clients',
+  '/bulk-reconnect': 'Reconnect Google',
   '/users': 'Users',
 };
 
@@ -91,6 +94,7 @@ function AppLayout() {
       { key: '/clients', icon: <TeamOutlined />, label: <NavLink to="/clients">Clients</NavLink> },
     ];
     if (user?.role === 'admin') {
+      items.push({ key: '/bulk-reconnect', icon: <GoogleOutlined />, label: <NavLink to="/bulk-reconnect">Reconnect Google</NavLink> });
       items.push({ key: '/users', icon: <UserOutlined />, label: <NavLink to="/users">Users</NavLink> });
     }
     return items;
@@ -205,6 +209,9 @@ function AppLayout() {
               <Route path="/bulk" element={<BulkSchedule />} />
               <Route path="/clients" element={<Clients />} />
               <Route path="/settings/:id" element={<MerchantSettings />} />
+              {user?.role === 'admin' && (
+                <Route path="/bulk-reconnect" element={<BulkReconnectGoogle />} />
+              )}
               {user?.role === 'admin' && (
                 <Route path="/users" element={<Users />} />
               )}

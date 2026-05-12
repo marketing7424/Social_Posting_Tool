@@ -269,6 +269,27 @@ function getGoogleAuthorizeUrl(mid) {
   });
 }
 
+// Bulk reconnect: same Google OAuth flow but not tied to a single merchant.
+// `state` is a sentinel so the callback knows to run the bulk path.
+const BULK_OAUTH_STATE = '__bulk__';
+
+function getGoogleBulkAuthorizeUrl() {
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    `${process.env.BASE_URL || 'http://localhost:3001'}/api/oauth/google/callback`
+  );
+
+  return oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    scope: [
+      'https://www.googleapis.com/auth/business.manage',
+    ],
+    state: BULK_OAUTH_STATE,
+    prompt: 'consent',
+  });
+}
+
 async function handleGoogleCallback(code, mid) {
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -299,6 +320,25 @@ async function handleGoogleCallback(code, mid) {
 
   // Multiple (or zero) locations — return data for picker
   return { autoSelected: false, locations, refreshToken, mid };
+}
+
+// Bulk reconnect: exchange the code for a fresh refresh token and list every
+// location the authorizing Google account can manage. No DB writes here — the
+// caller decides which merchants to re-attach to this token.
+async function handleGoogleBulkCallback(code) {
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    `${process.env.BASE_URL || 'http://localhost:3001'}/api/oauth/google/callback`
+  );
+
+  const { tokens } = await oauth2Client.getToken(code);
+  oauth2Client.setCredentials(tokens);
+
+  const refreshToken = tokens.refresh_token || tokens.access_token;
+  const locations = await listGoogleLocations(oauth2Client);
+
+  return { refreshToken, locations };
 }
 
 // Fetch all Google Business locations across all accounts
@@ -398,7 +438,10 @@ module.exports = {
   testFacebookConnection,
   testInstagramConnection,
   getGoogleAuthorizeUrl,
+  getGoogleBulkAuthorizeUrl,
   handleGoogleCallback,
+  handleGoogleBulkCallback,
   selectGoogleLocation,
   testGoogleConnection,
+  BULK_OAUTH_STATE,
 };
