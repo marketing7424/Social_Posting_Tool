@@ -10,6 +10,7 @@ import {
   Popconfirm,
   Typography,
   Tooltip,
+  Segmented,
 } from 'antd';
 import {
   PlusOutlined,
@@ -136,6 +137,7 @@ export default function Clients() {
   const [editingMerchant, setEditingMerchant] = useState(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [brokenFilter, setBrokenFilter] = useState('all');
   const [form] = Form.useForm();
 
   const fetchMerchants = useCallback(async (search = '') => {
@@ -251,6 +253,29 @@ export default function Clients() {
     }
     return best;
   })();
+
+  // "Broken" = platform is configured AND has been tested AND test failed.
+  // Stale/expiring/not-tested don't count — we only want confirmed failures.
+  const isFbBroken = (m) => !!m.fbPageId && !!m.fbLastCheckAt && !m.fbLastCheckOk;
+  const isIgBroken = (m) => !!m.igUserId && !!m.igLastCheckAt && !m.igLastCheckOk;
+  const isGoogleBroken = (m) => !!m.googleToken && !!m.googleLastCheckAt && !m.googleLastCheckOk;
+
+  const fbBrokenCount = merchants.filter(isFbBroken).length;
+  const igBrokenCount = merchants.filter(isIgBroken).length;
+  const googleBrokenCount = merchants.filter(isGoogleBroken).length;
+  const anyBrokenCount = merchants.filter(
+    (m) => isFbBroken(m) || isIgBroken(m) || isGoogleBroken(m)
+  ).length;
+
+  const filteredMerchants = merchants.filter((m) => {
+    switch (brokenFilter) {
+      case 'any': return isFbBroken(m) || isIgBroken(m) || isGoogleBroken(m);
+      case 'fb': return isFbBroken(m);
+      case 'ig': return isIgBroken(m);
+      case 'google': return isGoogleBroken(m);
+      default: return true;
+    }
+  });
 
   const columns = [
     {
@@ -398,9 +423,22 @@ export default function Clients() {
           : 'Connections not tested yet — click "Test all connections" to verify which tokens are actually live'}
       </Text>
 
+      <Segmented
+        value={brokenFilter}
+        onChange={setBrokenFilter}
+        style={{ marginBottom: 12 }}
+        options={[
+          { label: `All (${merchants.length})`, value: 'all' },
+          { label: `Any broken (${anyBrokenCount})`, value: 'any', disabled: anyBrokenCount === 0 },
+          { label: `FB broken (${fbBrokenCount})`, value: 'fb', disabled: fbBrokenCount === 0 },
+          { label: `IG broken (${igBrokenCount})`, value: 'ig', disabled: igBrokenCount === 0 },
+          { label: `Google broken (${googleBrokenCount})`, value: 'google', disabled: googleBrokenCount === 0 },
+        ]}
+      />
+
       <Table
         columns={columns}
-        dataSource={merchants}
+        dataSource={filteredMerchants}
         rowKey="mid"
         loading={loading}
         pagination={{ pageSize: 10, showSizeChanger: true }}
