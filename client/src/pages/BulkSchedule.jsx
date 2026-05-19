@@ -14,7 +14,7 @@ import utc from 'dayjs/plugin/utc';
 dayjs.extend(utc);
 import {
   searchMerchants, uploadMedia, deleteMedia, generateCaptions, regenerateCaption,
-  createPost, publishPost, getPostStatus, schedulePost, getPosts,
+  createPost, publishPost, getPostStatus, schedulePost, getPosts, verifyGooglePost,
 } from '../api/client';
 import PreviewPanel from '../components/previews/PreviewPanel';
 import GooglePostTypeFields from '../components/google/GooglePostTypeFields';
@@ -47,6 +47,20 @@ const QUICK_SUGGESTIONS = [
 
 function isVideo(file) {
   return file.mimetype?.startsWith('video/') || file.filename?.match(/\.(mp4|mov|avi)$/i);
+}
+
+// Mass publish stagger delay — rải các publish call ra theo thời gian để né Google spam filter
+const STAGGER_MS = 1500;
+
+// Parse a possibly-JSON error string and return a short, human-readable message
+function truncateErr(err) {
+  if (!err) return 'Failed';
+  let msg = typeof err === 'string' ? err : (err.message || String(err));
+  try {
+    const parsed = JSON.parse(msg);
+    if (parsed && typeof parsed === 'object' && parsed.message) msg = parsed.message;
+  } catch { /* not JSON, use as-is */ }
+  return msg.length > 140 ? msg.slice(0, 137) + '...' : msg;
 }
 
 async function fetchMerchantStats(mid) {
@@ -604,6 +618,16 @@ export default function BulkSchedule() {
   const [publishing, setPublishing] = useState(false);
   const [published, setPublished] = useState(false);
 
+  // Mass publish progress state — { current, total, countdown } while running
+  const [staggerInfo, setStaggerInfo] = useState(null);
+  // Final summary modal — { succeeded: [names], failed: [{name, details}] }
+  const [finalSummary, setFinalSummary] = useState(null);
+
+  // Keep a ref to current rows for the end-of-publish summary, which reads
+  // state after multiple async updates have settled.
+  const rowsRef = useRef(rows);
+  useEffect(() => { rowsRef.current = rows; }, [rows]);
+
   // Mass Publish state
   const [massModalOpen, setMassModalOpen] = useState(false);
   const [allMerchants, setAllMerchants] = useState([]);
@@ -842,6 +866,67 @@ export default function BulkSchedule() {
     (r.platforms.some(p => r.captions[p]?.trim()) || r.mediaFiles.length > 0)
   );
 
+  // Poll one post's status, then verify Google before marking the row done.
+  // Returns when the row's UI result is settled.
+  const pollAndVerify = async (rowId, postId) => {
+    let final = null;
+    for (let i = 0; i < 30; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const status = await getPostStatus(postId);
+        if (status.status === 'publishing') continue;
+        final = status;
+        break;
+      } catch { /* keep polling */ }
+    }
+    if (!final) {
+      updateRow(rowId, { publishing: false });
+      return;
+    }
+
+    const pr = {};
+    for (const [plat, r] of Object.entries(final.results || {})) {
+      pr[plat] = { status: r.status, error: r.error || null };
+    }
+
+    // Google may report 200 OK but silently block the post (spam filter for
+    // duplicate content across many locations). Verify the live state.
+    if (pr.google?.status === 'success') {
+      try {
+        const v = await verifyGooglePost(postId);
+        if (v && v.action === 'marked_failed') {
+          const updated = await getPostStatus(postId);
+          const gp = updated.results?.google;
+          if (gp) pr.google = { status: gp.status, error: gp.error };
+        }
+      } catch { /* leave as success on verify failure */ }
+    }
+
+    updateRow(rowId, { publishing: false, result: { status: 'done', platforms: pr } });
+  };
+
+  // After all rows are done, aggregate into a summary modal.
+  const showFinalSummary = () => {
+    const currentRows = rowsRef.current;
+    const published = currentRows.filter(r => r.result);
+    const succeeded = [];
+    const failed = [];
+    for (const r of published) {
+      const name = r.merchant?.dbaName || r.merchant?.mid || 'Unknown';
+      const platforms = r.result.platforms || {};
+      const failedPlats = Object.entries(platforms).filter(([, v]) => v.status === 'failed');
+      if (failedPlats.length === 0) {
+        succeeded.push(name);
+      } else {
+        failed.push({
+          name,
+          details: failedPlats.map(([p, v]) => `${p}: ${truncateErr(v.error)}`),
+        });
+      }
+    }
+    setFinalSummary({ succeeded, failed });
+  };
+
   const handlePublishAll = async () => {
     const valid = getValidRows();
     if (valid.length === 0) {
@@ -850,9 +935,12 @@ export default function BulkSchedule() {
     }
 
     setPublishing(true);
-    let successCount = 0;
+    setFinalSummary(null);
+    const verifyTasks = [];
 
-    for (const row of valid) {
+    for (let idx = 0; idx < valid.length; idx++) {
+      const row = valid[idx];
+      setStaggerInfo({ current: idx + 1, total: valid.length, countdown: 0 });
       updateRow(row.id, { publishing: true });
 
       try {
@@ -884,30 +972,9 @@ export default function BulkSchedule() {
           const done = {};
           for (const p of row.platforms) done[p] = { status: 'success' };
           updateRow(row.id, { publishing: false, result: { status: 'done', platforms: done } });
-          successCount++;
         } else {
           await publishPost(post.id);
-          // Poll in background
-          ((rowId, postId) => {
-            const poll = async () => {
-              for (let i = 0; i < 30; i++) {
-                await new Promise(r => setTimeout(r, 2000));
-                try {
-                  const status = await getPostStatus(postId);
-                  if (status.status === 'publishing') continue;
-                  const pr = {};
-                  for (const [plat, r] of Object.entries(status.results || {})) {
-                    pr[plat] = { status: r.status, error: r.error || null };
-                  }
-                  updateRow(rowId, { publishing: false, result: { status: 'done', platforms: pr } });
-                  return;
-                } catch { /* keep polling */ }
-              }
-              updateRow(rowId, { publishing: false });
-            };
-            poll();
-          })(row.id, post.id);
-          successCount++;
+          verifyTasks.push(pollAndVerify(row.id, post.id));
         }
       } catch (err) {
         updateRow(row.id, {
@@ -915,11 +982,24 @@ export default function BulkSchedule() {
           result: { status: 'failed', platforms: { _error: { status: 'failed', error: err.response?.data?.error || err.message } } },
         });
       }
+
+      // Stagger countdown — skip after the last row
+      if (idx < valid.length - 1) {
+        const tenths = STAGGER_MS / 100;
+        for (let s = tenths; s > 0; s--) {
+          setStaggerInfo({ current: idx + 1, total: valid.length, countdown: (s / 10).toFixed(1) });
+          await new Promise(r => setTimeout(r, 100));
+        }
+      }
     }
+
+    setStaggerInfo(null);
+    // Wait for all background polling+verify to complete before showing the summary
+    await Promise.allSettled(verifyTasks);
 
     setPublishing(false);
     setPublished(true);
-    if (successCount > 0) message.success(`${successCount} post(s) submitted!`);
+    showFinalSummary();
   };
 
   const validCount = getValidRows().length;
@@ -931,6 +1011,27 @@ export default function BulkSchedule() {
         <Title level={3} style={{ marginBottom: 2 }}>Bulk Schedule Posts</Title>
         <Text type="secondary">Create and publish multiple posts at once across all your clients.</Text>
       </div>
+
+      {/* ── Mass publish progress banner ── */}
+      {staggerInfo && (
+        <div style={{
+          marginBottom: 12, padding: 12, borderRadius: 8,
+          background: '#EFF6FF', border: '1px solid #BFDBFE',
+          display: 'flex', alignItems: 'center', gap: 12,
+        }}>
+          <LoadingOutlined spin style={{ fontSize: 18, color: '#2563EB' }} />
+          <div style={{ flex: 1 }}>
+            <Text strong style={{ color: '#1E40AF' }}>
+              Publishing store {staggerInfo.current} of {staggerInfo.total}
+            </Text>
+            {Number(staggerInfo.countdown) > 0 && (
+              <div style={{ fontSize: 12, color: '#3B82F6', marginTop: 2 }}>
+                Next post in {staggerInfo.countdown}s... (staggered to avoid Google spam filter)
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Publish Results Summary ── */}
       <PublishResultsSummary rows={rows} />
@@ -1274,6 +1375,55 @@ export default function BulkSchedule() {
             <Text style={{ fontSize: 12 }}>Remember excluded stores for next time</Text>
           </Checkbox>
         </div>
+      </Modal>
+
+      {/* Final summary modal after Publish All completes */}
+      <Modal
+        title={
+          finalSummary && finalSummary.failed.length === 0
+            ? `All ${finalSummary.succeeded.length} stores published successfully`
+            : `Publish complete — ${finalSummary?.succeeded.length || 0} succeeded, ${finalSummary?.failed.length || 0} failed`
+        }
+        open={!!finalSummary}
+        onCancel={() => setFinalSummary(null)}
+        footer={<Button type="primary" onClick={() => setFinalSummary(null)}>Close</Button>}
+        width={620}
+      >
+        {finalSummary && (
+          <div>
+            {finalSummary.failed.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <Text strong style={{ color: '#DC2626' }}>Failed stores:</Text>
+                <div style={{ marginTop: 8, maxHeight: 320, overflowY: 'auto' }}>
+                  {finalSummary.failed.map((f, i) => (
+                    <div key={i} style={{
+                      padding: '8px 12px', marginBottom: 6,
+                      background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 6,
+                    }}>
+                      <Text strong>{f.name}</Text>
+                      <div style={{ fontSize: 12, color: '#7F1D1D', marginTop: 4 }}>
+                        {f.details.map((d, j) => <div key={j}>• {d}</div>)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {finalSummary.succeeded.length > 0 && (
+              <div>
+                <Text strong style={{ color: '#16A34A' }}>
+                  Successful: {finalSummary.succeeded.length} store{finalSummary.succeeded.length === 1 ? '' : 's'}
+                </Text>
+                {finalSummary.failed.length > 0 && (
+                  <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
+                    {finalSummary.succeeded.slice(0, 10).join(', ')}
+                    {finalSummary.succeeded.length > 10 ? `, +${finalSummary.succeeded.length - 10} more` : ''}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </Modal>
     </div>
   );

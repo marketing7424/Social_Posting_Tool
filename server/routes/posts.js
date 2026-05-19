@@ -1,6 +1,8 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const axios = require('axios');
+const { google } = require('googleapis');
 const { v4: uuid } = require('uuid');
 const { getDb } = require('../services/db');
 const { publishToFacebook, publishToInstagram, publishToGoogle } = require('../services/publisher');
@@ -457,6 +459,74 @@ router.post('/:id/retry', async (req, res) => {
   db.prepare('UPDATE posts SET status = ? WHERE id = ?').run(finalStatus, post.id);
 
   res.json({ status: finalStatus, results });
+});
+
+// Recompute a post's overall status from its post_platforms rows.
+function recomputePostStatus(db, postId) {
+  const all = db.prepare("SELECT status FROM post_platforms WHERE post_id = ?").all(postId);
+  if (all.length === 0) return;
+  const allSuccess = all.every(p => p.status === 'success');
+  const anySuccess = all.some(p => p.status === 'success');
+  const finalStatus = allSuccess ? 'success' : anySuccess ? 'partial' : 'failed';
+  db.prepare('UPDATE posts SET status = ? WHERE id = ?').run(finalStatus, postId);
+}
+
+// GET /api/posts/:id/verify-google
+// Verify a freshly-published Google post is actually LIVE on Google Business
+// Profile. Used by mass publish to catch silent spam-filter rejections where
+// the create call returns 200 OK but the post never goes public. Read-only
+// against Google; only writes to DB if Google reports REJECTED/REMOVED.
+router.get('/:id/verify-google', async (req, res) => {
+  const db = getDb();
+  const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(req.params.id);
+  if (!post) return res.status(404).json({ verified: false, reason: 'post not found' });
+
+  const pp = db.prepare(
+    "SELECT * FROM post_platforms WHERE post_id = ? AND platform = 'google'"
+  ).get(post.id);
+  if (!pp) return res.json({ verified: true, reason: 'no google platform' });
+  if (pp.status !== 'success') return res.json({ verified: true, reason: 'already not success' });
+
+  if (!pp.platform_post_id) {
+    // Marked success but with no postId — that's a silent failure
+    db.prepare("UPDATE post_platforms SET status = 'failed', error = ? WHERE id = ?")
+      .run('Google API returned no post name — likely blocked by spam filter', pp.id);
+    recomputePostStatus(db, post.id);
+    return res.json({ verified: false, reason: 'no post id', action: 'marked_failed' });
+  }
+
+  const merchant = db.prepare('SELECT * FROM merchants WHERE mid = ?').get(post.merchant_mid);
+  if (!merchant?.google_token) return res.json({ verified: true, reason: 'no token' });
+
+  try {
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET
+    );
+    oauth2Client.setCredentials({ refresh_token: merchant.google_token });
+    const { token } = await oauth2Client.getAccessToken();
+
+    const resp = await axios.get(
+      `https://mybusiness.googleapis.com/v4/${pp.platform_post_id}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    const state = resp.data.state || 'unknown';
+    // LIVE = visible publicly. PROCESSING = still being reviewed (give benefit of doubt).
+    // REJECTED / REMOVED = blocked by Google.
+    if (state === 'REJECTED' || state === 'REMOVED') {
+      const errMsg = `Google blocked the post (state=${state}). Common cause: identical content across many locations triggers the spam filter. Try varying caption per store.`;
+      db.prepare("UPDATE post_platforms SET status = 'failed', error = ? WHERE id = ?")
+        .run(errMsg, pp.id);
+      recomputePostStatus(db, post.id);
+      return res.json({ verified: false, state, action: 'marked_failed' });
+    }
+    return res.json({ verified: true, state });
+  } catch (err) {
+    // Be conservative: if verify itself fails, don't downgrade success
+    console.error('[verify-google]', err.response?.data?.error?.message || err.message);
+    return res.json({ verified: true, error: err.message, action: 'kept_status' });
+  }
 });
 
 // DELETE /api/posts/:id
