@@ -90,6 +90,7 @@ export const getGoogleBulkPreview = () => api.get('/oauth/google/bulk-preview').
 export const applyGoogleBulkReconnect = (mids) => api.post('/oauth/google/bulk-apply', { mids }).then(r => r.data);
 export const getMetaBulkPreview = () => api.get('/oauth/meta/bulk-preview').then(r => r.data);
 export const applyMetaBulkReconnect = (mids) => api.post('/oauth/meta/bulk-apply', { mids }).then(r => r.data);
+export const testAllConnections = () => api.post('/oauth/test-all').then(r => r.data);
 
 // Analytics
 export const getAnalytics = (mid, period = 30) => api.get(`/analytics/${mid}?period=${period}`).then(r => r.data);

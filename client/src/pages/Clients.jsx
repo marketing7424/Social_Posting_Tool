@@ -20,21 +20,30 @@ import {
   CheckCircleFilled,
   CloseCircleFilled,
   WarningFilled,
+  QuestionCircleFilled,
+  ExperimentOutlined,
   FacebookFilled,
   InstagramFilled,
   GoogleOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
+import dayjs from 'dayjs';
+import relativeTime from 'dayjs/plugin/relativeTime';
 import {
   searchMerchants,
   createMerchant,
   updateMerchant,
   deleteMerchant,
+  testAllConnections,
 } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import PhoneInput from '../components/merchants/PhoneInput';
 
-const { Title } = Typography;
+dayjs.extend(relativeTime);
+
+const { Title, Text } = Typography;
+
+const STALE_HOURS = 24;
 
 const PLATFORM_ICONS = {
   facebook: { icon: <FacebookFilled />, color: '#1D4ED8', label: 'Facebook' },
@@ -49,29 +58,67 @@ function getTokenAgeDays(tokenCreatedAt) {
   return Math.floor((Date.now() - created.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-const platformDot = (connected, platformKey, tokenCreatedAt) => {
+function getHoursSince(timestamp) {
+  if (!timestamp) return null;
+  const t = Date.parse(timestamp);
+  if (Number.isNaN(t)) return null;
+  return (Date.now() - t) / (1000 * 60 * 60);
+}
+
+// Decides what icon to show next to a platform logo based on:
+//   • whether the merchant has the platform configured in DB (`hasId`)
+//   • the most recent liveness check result (`lastCheckOk`, `lastCheckAt`, `lastCheckError`)
+//   • token age (for FB/IG which expire at 60d)
+// Live-check state is authoritative when available — token-age only flags a soft "expiring soon"
+// for FB/IG when we never failed a check but the token is approaching its TTL.
+const platformDot = ({ hasId, platformKey, lastCheckOk, lastCheckAt, lastCheckError, tokenCreatedAt }) => {
   const cfg = PLATFORM_ICONS[platformKey];
+  const hoursSinceCheck = getHoursSince(lastCheckAt);
   const ageDays = getTokenAgeDays(tokenCreatedAt);
-  // Meta tokens expire after 60 days; warn at 50+
-  const isExpiring = platformKey !== 'google' && connected && ageDays !== null && ageDays >= 50;
-  const isExpired = platformKey !== 'google' && connected && ageDays !== null && ageDays >= 60;
-  const statusIcon = !connected ? (
-    <CloseCircleFilled style={{ color: '#ff4d4f', fontSize: 11 }} />
-  ) : isExpired ? (
-    <Tooltip title={`Token expired (${ageDays} days old) — reconnect now`}>
-      <WarningFilled style={{ color: '#ff4d4f', fontSize: 11 }} />
-    </Tooltip>
-  ) : isExpiring ? (
-    <Tooltip title={`Token expires soon (${ageDays}/60 days) — reconnect soon`}>
-      <WarningFilled style={{ color: '#faad14', fontSize: 11 }} />
-    </Tooltip>
-  ) : (
-    <CheckCircleFilled style={{ color: '#52c41a', fontSize: 11 }} />
-  );
+  const tokenExpiring = platformKey !== 'google' && hasId && ageDays !== null && ageDays >= 50 && ageDays < 60;
+
+  let statusIcon;
+  if (!hasId) {
+    statusIcon = (
+      <Tooltip title="Not configured">
+        <CloseCircleFilled style={{ color: '#ff4d4f', fontSize: 11 }} />
+      </Tooltip>
+    );
+  } else if (!lastCheckAt) {
+    statusIcon = (
+      <Tooltip title="Not tested yet — click 'Test all connections' to verify">
+        <QuestionCircleFilled style={{ color: '#9ca3af', fontSize: 11 }} />
+      </Tooltip>
+    );
+  } else if (!lastCheckOk) {
+    statusIcon = (
+      <Tooltip title={`Broken: ${lastCheckError || 'connection test failed'}`}>
+        <WarningFilled style={{ color: '#ff4d4f', fontSize: 11 }} />
+      </Tooltip>
+    );
+  } else if (hoursSinceCheck !== null && hoursSinceCheck >= STALE_HOURS) {
+    statusIcon = (
+      <Tooltip title={`Last verified ${dayjs(lastCheckAt).fromNow()} — re-test to confirm still live`}>
+        <WarningFilled style={{ color: '#faad14', fontSize: 11 }} />
+      </Tooltip>
+    );
+  } else if (tokenExpiring) {
+    statusIcon = (
+      <Tooltip title={`Token expires soon (${ageDays}/60 days) — reconnect soon`}>
+        <WarningFilled style={{ color: '#faad14', fontSize: 11 }} />
+      </Tooltip>
+    );
+  } else {
+    statusIcon = (
+      <Tooltip title={`Live — last verified ${dayjs(lastCheckAt).fromNow()}`}>
+        <CheckCircleFilled style={{ color: '#52c41a', fontSize: 11 }} />
+      </Tooltip>
+    );
+  }
 
   return (
     <Space size={4}>
-      <span style={{ color: connected ? cfg.color : '#d1d5db', fontSize: 16, display: 'flex' }}>
+      <span style={{ color: hasId ? cfg.color : '#d1d5db', fontSize: 16, display: 'flex' }}>
         {cfg.icon}
       </span>
       {statusIcon}
@@ -88,6 +135,7 @@ export default function Clients() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingMerchant, setEditingMerchant] = useState(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [form] = Form.useForm();
 
   const fetchMerchants = useCallback(async (search = '') => {
@@ -172,6 +220,38 @@ export default function Clients() {
     }
   };
 
+  const handleTestAll = async () => {
+    setTesting(true);
+    try {
+      const s = await testAllConnections();
+      const fbTotal = s.fbOk + s.fbFail;
+      const igTotal = s.igOk + s.igFail;
+      const gTotal = s.googleOk + s.googleFail;
+      message.success(
+        `Tested ${s.tested} merchants — ` +
+        `FB ${s.fbOk}/${fbTotal}, IG ${s.igOk}/${igTotal}, Google ${s.googleOk}/${gTotal}`
+      );
+      await fetchMerchants(searchText);
+    } catch (err) {
+      message.error('Test failed: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  // Most recent liveness check across all merchants + all platforms — used for the
+  // "Connection statuses last tested X ago" banner.
+  const lastTestedAt = (() => {
+    let best = null;
+    for (const m of merchants) {
+      for (const ts of [m.fbLastCheckAt, m.igLastCheckAt, m.googleLastCheckAt]) {
+        if (!ts) continue;
+        if (!best || ts > best) best = ts;
+      }
+    }
+    return best;
+  })();
+
   const columns = [
     {
       title: 'MID',
@@ -217,9 +297,30 @@ export default function Clients() {
       key: 'platforms',
       render: (_, record) => (
         <Space size="middle">
-          {platformDot(!!record.fbPageId, 'facebook', record.fbTokenCreatedAt)}
-          {platformDot(!!record.igUserId, 'instagram', record.fbTokenCreatedAt)}
-          {platformDot(!!record.googleToken, 'google', record.googleTokenCreatedAt)}
+          {platformDot({
+            hasId: !!record.fbPageId,
+            platformKey: 'facebook',
+            lastCheckOk: record.fbLastCheckOk,
+            lastCheckAt: record.fbLastCheckAt,
+            lastCheckError: record.fbLastCheckError,
+            tokenCreatedAt: record.fbTokenCreatedAt,
+          })}
+          {platformDot({
+            hasId: !!record.igUserId,
+            platformKey: 'instagram',
+            lastCheckOk: record.igLastCheckOk,
+            lastCheckAt: record.igLastCheckAt,
+            lastCheckError: record.igLastCheckError,
+            tokenCreatedAt: record.fbTokenCreatedAt,
+          })}
+          {platformDot({
+            hasId: !!record.googleToken,
+            platformKey: 'google',
+            lastCheckOk: record.googleLastCheckOk,
+            lastCheckAt: record.googleLastCheckAt,
+            lastCheckError: record.googleLastCheckError,
+            tokenCreatedAt: record.googleTokenCreatedAt,
+          })}
         </Space>
       ),
     },
@@ -261,6 +362,11 @@ export default function Clients() {
         <Title level={3} style={{ margin: 0 }}>Clients</Title>
         <Space>
           {user?.role === 'admin' && (
+            <Button icon={<ExperimentOutlined />} loading={testing} onClick={handleTestAll}>
+              Test all connections
+            </Button>
+          )}
+          {user?.role === 'admin' && (
             <Button icon={<FacebookFilled />} onClick={() => navigate('/bulk-reconnect-facebook')}>
               Reconnect Facebook
             </Button>
@@ -283,8 +389,14 @@ export default function Clients() {
         value={searchText}
         onChange={handleSearchChange}
         onSearch={handleSearch}
-        style={{ marginBottom: 16, maxWidth: 480 }}
+        style={{ marginBottom: 8, maxWidth: 480 }}
       />
+
+      <Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12 }}>
+        {lastTestedAt
+          ? `Connection statuses last tested ${dayjs(lastTestedAt).fromNow()} — click "Test all connections" to re-verify`
+          : 'Connections not tested yet — click "Test all connections" to verify which tokens are actually live'}
+      </Text>
 
       <Table
         columns={columns}

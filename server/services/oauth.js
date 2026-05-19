@@ -258,6 +258,7 @@ async function listMetaPages(userToken) {
 async function testFacebookConnection(pageId, accessToken) {
   const resp = await axios.get(`${META_API}/${pageId}`, {
     params: { fields: 'id,name,fan_count', access_token: accessToken },
+    timeout: 8000,
   });
   return {
     connected: true,
@@ -270,6 +271,7 @@ async function testFacebookConnection(pageId, accessToken) {
 async function testInstagramConnection(igUserId, accessToken) {
   const resp = await axios.get(`${META_API}/${igUserId}`, {
     params: { fields: 'id,username,followers_count,media_count', access_token: accessToken },
+    timeout: 8000,
   });
   return {
     connected: true,

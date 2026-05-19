@@ -450,4 +450,83 @@ router.post('/test/:mid', async (req, res) => {
   res.json(results);
 });
 
+// POST /api/oauth/test-all - Test every merchant's platform connections and
+// persist the result so /clients can show real liveness instead of just DB presence.
+router.post('/test-all', async (req, res) => {
+  const db = getDb();
+  const merchants = db.prepare('SELECT * FROM merchants').all();
+  const now = new Date().toISOString();
+  const summary = {
+    tested: 0,
+    fbOk: 0, fbFail: 0,
+    igOk: 0, igFail: 0,
+    googleOk: 0, googleFail: 0,
+  };
+
+  async function testOne(row) {
+    const updates = {};
+
+    if (row.fb_page_id && row.fb_token) {
+      try {
+        await testFacebookConnection(row.fb_page_id, row.fb_token);
+        updates.fb_last_check_ok = 1;
+        updates.fb_last_check_error = '';
+        summary.fbOk++;
+      } catch (err) {
+        updates.fb_last_check_ok = 0;
+        updates.fb_last_check_error = String(err.response?.data?.error?.message || err.message || 'unknown').slice(0, 500);
+        summary.fbFail++;
+      }
+      updates.fb_last_check_at = now;
+    }
+
+    if (row.ig_user_id && row.ig_token) {
+      try {
+        await testInstagramConnection(row.ig_user_id, row.ig_token);
+        updates.ig_last_check_ok = 1;
+        updates.ig_last_check_error = '';
+        summary.igOk++;
+      } catch (err) {
+        updates.ig_last_check_ok = 0;
+        updates.ig_last_check_error = String(err.response?.data?.error?.message || err.message || 'unknown').slice(0, 500);
+        summary.igFail++;
+      }
+      updates.ig_last_check_at = now;
+    }
+
+    if (row.google_token) {
+      try {
+        await testGoogleConnection(row.google_token, row.google_location_id);
+        updates.google_last_check_ok = 1;
+        updates.google_last_check_error = '';
+        summary.googleOk++;
+      } catch (err) {
+        updates.google_last_check_ok = 0;
+        updates.google_last_check_error = String(err.response?.data?.error?.message || err.message || 'unknown').slice(0, 500);
+        summary.googleFail++;
+      }
+      updates.google_last_check_at = now;
+    }
+
+    const fields = Object.keys(updates);
+    if (fields.length > 0) {
+      const setClause = fields.map(k => `${k} = ?`).join(', ');
+      const values = fields.map(k => updates[k]);
+      values.push(row.mid);
+      db.prepare(`UPDATE merchants SET ${setClause}, updated_at = datetime('now') WHERE mid = ?`).run(...values);
+    }
+    summary.tested++;
+  }
+
+  // Run in chunks of 10 to avoid hitting Facebook's 200/user/hour rate limit
+  // and to keep memory bounded for large merchant lists.
+  const CHUNK = 10;
+  for (let i = 0; i < merchants.length; i += CHUNK) {
+    const slice = merchants.slice(i, i + CHUNK);
+    await Promise.allSettled(slice.map(testOne));
+  }
+
+  res.json(summary);
+});
+
 module.exports = router;

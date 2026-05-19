@@ -52,6 +52,16 @@ function getDb() {
       // Repost linking: original_post_id on the new post, reposted_as on the original
       "ALTER TABLE posts ADD COLUMN original_post_id TEXT DEFAULT ''",
       "ALTER TABLE posts ADD COLUMN reposted_as TEXT DEFAULT ''",
+      // Per-platform connection liveness (populated by POST /api/oauth/test-all)
+      "ALTER TABLE merchants ADD COLUMN fb_last_check_at TEXT DEFAULT ''",
+      "ALTER TABLE merchants ADD COLUMN fb_last_check_ok INTEGER DEFAULT 0",
+      "ALTER TABLE merchants ADD COLUMN fb_last_check_error TEXT DEFAULT ''",
+      "ALTER TABLE merchants ADD COLUMN ig_last_check_at TEXT DEFAULT ''",
+      "ALTER TABLE merchants ADD COLUMN ig_last_check_ok INTEGER DEFAULT 0",
+      "ALTER TABLE merchants ADD COLUMN ig_last_check_error TEXT DEFAULT ''",
+      "ALTER TABLE merchants ADD COLUMN google_last_check_at TEXT DEFAULT ''",
+      "ALTER TABLE merchants ADD COLUMN google_last_check_ok INTEGER DEFAULT 0",
+      "ALTER TABLE merchants ADD COLUMN google_last_check_error TEXT DEFAULT ''",
     ];
     for (const sql of migrations) {
       try { db.exec(sql); } catch (_) { /* column already exists */ }
