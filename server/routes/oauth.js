@@ -1,7 +1,9 @@
 const express = require('express');
 const {
   getMetaAuthorizeUrl,
+  getMetaBulkAuthorizeUrl,
   handleMetaCallback,
+  handleMetaBulkCallback,
   selectMetaPage,
   listMetaPages,
   testFacebookConnection,
@@ -13,6 +15,7 @@ const {
   selectGoogleLocation,
   testGoogleConnection,
   BULK_OAUTH_STATE,
+  META_BULK_STATE,
 } = require('../services/oauth');
 const { getDb } = require('../services/db');
 
@@ -35,14 +38,36 @@ router.get('/meta/authorize/:mid', (req, res) => {
   }
 });
 
+// GET /api/oauth/meta/bulk-authorize - start a bulk reconnect (one login, many merchants)
+router.get('/meta/bulk-authorize', (req, res) => {
+  try {
+    res.redirect(getMetaBulkAuthorizeUrl());
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to start Meta OAuth: ' + err.message });
+  }
+});
+
 // GET /api/oauth/meta/callback
 router.get('/meta/callback', async (req, res) => {
   const frontendUrl = getFrontendUrl();
+  const { code, state, error } = req.query;
+  const isBulk = state === META_BULK_STATE;
+
+  if (error) {
+    return isBulk
+      ? res.redirect(`${frontendUrl}/bulk-reconnect-facebook?oauth_error=${encodeURIComponent(error)}`)
+      : res.redirect(`${frontendUrl}/settings/${state || ''}?oauth_error=${encodeURIComponent(error)}`);
+  }
+
   try {
-    const { code, state: mid, error } = req.query;
-    if (error) {
-      return res.redirect(`${frontendUrl}/settings/${mid}?oauth_error=${encodeURIComponent(error)}`);
+    if (isBulk) {
+      const result = await handleMetaBulkCallback(code);
+      pendingOAuth.set(META_BULK_STATE, result);
+      setTimeout(() => pendingOAuth.delete(META_BULK_STATE), 10 * 60 * 1000);
+      return res.redirect(`${frontendUrl}/bulk-reconnect-facebook?ready=1`);
     }
+
+    const mid = state;
     const result = await handleMetaCallback(code, mid);
 
     // Store pages data temporarily for the page picker
@@ -53,8 +78,9 @@ router.get('/meta/callback', async (req, res) => {
     res.redirect(`${frontendUrl}/settings/${mid}?pick_page=true`);
   } catch (err) {
     console.error('[oauth] Meta callback error:', err.response?.data || err.message);
-    const mid = req.query.state || '';
-    res.redirect(`${frontendUrl}/settings/${mid}?oauth_error=${encodeURIComponent(err.message)}`);
+    return isBulk
+      ? res.redirect(`${frontendUrl}/bulk-reconnect-facebook?oauth_error=${encodeURIComponent(err.message)}`)
+      : res.redirect(`${frontendUrl}/settings/${state || ''}?oauth_error=${encodeURIComponent(err.message)}`);
   }
 });
 
@@ -276,6 +302,79 @@ router.get('/google/bulk-preview', (req, res) => {
     matched,
     unmatched,
   });
+});
+
+// --- Bulk Meta reconnect ---
+
+// GET /api/oauth/meta/bulk-preview - which merchants this Facebook login can reconnect
+router.get('/meta/bulk-preview', (req, res) => {
+  const data = pendingOAuth.get(META_BULK_STATE);
+  if (!data) {
+    return res.status(404).json({ error: 'Facebook session expired. Connect a Facebook account again.' });
+  }
+
+  const db = getDb();
+  const rows = db.prepare("SELECT * FROM merchants WHERE fb_page_id IS NOT NULL AND fb_page_id != ''").all();
+  const pageById = new Map(data.pages.map(p => [p.id, p]));
+
+  const matched = [];
+  const unmatched = [];
+  for (const row of rows) {
+    const page = pageById.get(row.fb_page_id);
+    const entry = {
+      mid: row.mid,
+      dbaName: row.dba_name,
+      fbPageId: row.fb_page_id,
+      fbPageName: row.fb_page_name || (page?.name || ''),
+      hasInstagram: !!(page?.hasInstagram),
+      tokenAgeDays: tokenAgeDays(row.fb_token_created_at),
+    };
+    if (page) matched.push(entry); else unmatched.push(entry);
+  }
+
+  res.json({
+    pageCount: (data.pages || []).length,
+    matched,
+    unmatched,
+  });
+});
+
+// POST /api/oauth/meta/bulk-apply - attach the new page token (and IG if linked) to chosen merchants
+router.post('/meta/bulk-apply', async (req, res) => {
+  const data = pendingOAuth.get(META_BULK_STATE);
+  if (!data) {
+    return res.status(404).json({ error: 'Facebook session expired. Connect a Facebook account again.' });
+  }
+
+  const mids = Array.isArray(req.body?.mids) ? req.body.mids : [];
+  if (mids.length === 0) return res.status(400).json({ error: 'No merchants selected' });
+
+  const db = getDb();
+  const pageById = new Map(data.pages.map(p => [p.id, p]));
+  let updated = 0;
+  let igUpdated = 0;
+  const skipped = [];
+
+  for (const mid of mids) {
+    const row = db.prepare('SELECT * FROM merchants WHERE mid = ?').get(mid);
+    if (!row) { skipped.push({ mid, reason: 'not found' }); continue; }
+    const page = pageById.get(row.fb_page_id);
+    if (!page) { skipped.push({ mid, reason: 'page not under this account' }); continue; }
+    try {
+      // selectMetaPage already detects Instagram and writes ig_user_id/ig_token/ig_username
+      // in the same transaction, so FB + IG reconnect in one shot.
+      const result = await selectMetaPage(mid, page.id, page.accessToken, page.name, data.userToken);
+      updated++;
+      if (result.igUserId) igUpdated++;
+    } catch (err) {
+      console.error(`[oauth] Meta bulk-apply failed for ${mid}:`, err.response?.data || err.message);
+      skipped.push({ mid, reason: err.message });
+    }
+  }
+
+  // Keep the pending data so the user can run another batch from the same login
+  // (it self-expires after 10 minutes).
+  res.json({ updated, igUpdated, skipped });
 });
 
 // POST /api/oauth/google/bulk-apply - attach the new refresh token to chosen merchants

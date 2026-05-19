@@ -9,6 +9,7 @@ import {
   CloudUploadOutlined,
   SendOutlined,
   GoogleOutlined,
+  FacebookFilled,
 } from '@ant-design/icons';
 import { lazy, Suspense, useMemo } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -20,6 +21,7 @@ const Clients = lazy(() => import('./pages/Clients'));
 const MerchantSettings = lazy(() => import('./pages/MerchantSettings'));
 const Users = lazy(() => import('./pages/Users'));
 const BulkReconnectGoogle = lazy(() => import('./pages/BulkReconnectGoogle'));
+const BulkReconnectFacebook = lazy(() => import('./pages/BulkReconnectFacebook'));
 const Login = lazy(() => import('./pages/Login'));
 
 const { Header, Content, Sider } = Layout;
@@ -32,6 +34,7 @@ const PAGE_TITLES = {
   '/posts': 'Manage Posts',
   '/clients': 'Clients',
   '/bulk-reconnect': 'Reconnect Google',
+  '/bulk-reconnect-facebook': 'Reconnect Facebook & Instagram',
   '/users': 'Users',
 };
 
@@ -94,6 +97,7 @@ function AppLayout() {
       { key: '/clients', icon: <TeamOutlined />, label: <NavLink to="/clients">Clients</NavLink> },
     ];
     if (user?.role === 'admin') {
+      items.push({ key: '/bulk-reconnect-facebook', icon: <FacebookFilled />, label: <NavLink to="/bulk-reconnect-facebook">Reconnect Facebook</NavLink> });
       items.push({ key: '/bulk-reconnect', icon: <GoogleOutlined />, label: <NavLink to="/bulk-reconnect">Reconnect Google</NavLink> });
       items.push({ key: '/users', icon: <UserOutlined />, label: <NavLink to="/users">Users</NavLink> });
     }
@@ -211,6 +215,9 @@ function AppLayout() {
               <Route path="/settings/:id" element={<MerchantSettings />} />
               {user?.role === 'admin' && (
                 <Route path="/bulk-reconnect" element={<BulkReconnectGoogle />} />
+              )}
+              {user?.role === 'admin' && (
+                <Route path="/bulk-reconnect-facebook" element={<BulkReconnectFacebook />} />
               )}
               {user?.role === 'admin' && (
                 <Route path="/users" element={<Users />} />

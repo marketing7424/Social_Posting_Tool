@@ -261,6 +261,11 @@ export default function Clients() {
         <Title level={3} style={{ margin: 0 }}>Clients</Title>
         <Space>
           {user?.role === 'admin' && (
+            <Button icon={<FacebookFilled />} onClick={() => navigate('/bulk-reconnect-facebook')}>
+              Reconnect Facebook
+            </Button>
+          )}
+          {user?.role === 'admin' && (
             <Button icon={<GoogleOutlined />} onClick={() => navigate('/bulk-reconnect')}>
               Reconnect Google
             </Button>

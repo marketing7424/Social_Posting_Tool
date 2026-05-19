@@ -6,6 +6,10 @@ const META_AUTH_URL = 'https://www.facebook.com/v21.0/dialog/oauth';
 const META_TOKEN_URL = 'https://graph.facebook.com/v21.0/oauth/access_token';
 const META_API = 'https://graph.facebook.com/v21.0';
 
+// Sentinel `state` value the Meta OAuth callback uses to recognize a bulk
+// reconnect (no merchant id yet — caller picks which merchants to apply to).
+const META_BULK_STATE = '__meta_bulk__';
+
 function updateMerchant(mid, updates) {
   const db = getDb();
   const fieldMap = {
@@ -44,10 +48,25 @@ function getMetaAuthorizeUrl(mid) {
   return `${META_AUTH_URL}?${params}`;
 }
 
-async function handleMetaCallback(code, mid) {
+// Bulk variant: same OAuth dialog, but `state` is the sentinel so the callback
+// knows to run the bulk path instead of single-merchant.
+function getMetaBulkAuthorizeUrl() {
+  const redirectUri = `${process.env.BASE_URL || 'http://localhost:3001'}/api/oauth/meta/callback`;
+  const params = new URLSearchParams({
+    client_id: process.env.META_APP_ID,
+    redirect_uri: redirectUri,
+    state: META_BULK_STATE,
+    response_type: 'code',
+    config_id: process.env.META_CONFIG_ID,
+    override_default_response_type: true,
+  });
+  return `${META_AUTH_URL}?${params}`;
+}
+
+// Exchange an OAuth code for a long-lived (60-day) user token.
+async function exchangeMetaCodeForLongToken(code) {
   const redirectUri = `${process.env.BASE_URL || 'http://localhost:3001'}/api/oauth/meta/callback`;
 
-  // Exchange code for short-lived user token
   console.log('[oauth] Step 1: Exchanging code for token...');
   let tokenResp;
   try {
@@ -66,7 +85,6 @@ async function handleMetaCallback(code, mid) {
   const shortToken = tokenResp.data.access_token;
   console.log('[oauth] Step 1 OK. Exchanging for long-lived token...');
 
-  // Exchange for long-lived user token (60 days)
   let longResp;
   try {
     longResp = await axios.get(`${META_API}/oauth/access_token`, {
@@ -81,10 +99,13 @@ async function handleMetaCallback(code, mid) {
     console.error('[oauth] Step 2 FAILED - Long-lived token error:', err.response?.data || err.message);
     throw err;
   }
-  const longToken = longResp.data.access_token;
-  console.log('[oauth] Step 2 OK. Fetching pages...');
+  console.log('[oauth] Step 2 OK.');
+  return longResp.data.access_token;
+}
 
-  // Step 3a: Get user's businesses
+// Fetch every Facebook Page the authorizing user can manage:
+// business-owned, business-client, and personal /me/accounts pages.
+async function fetchPagesForUserToken(longToken) {
   console.log('[oauth] Step 3: Fetching businesses...');
   let businesses = [];
   try {
@@ -97,12 +118,10 @@ async function handleMetaCallback(code, mid) {
     console.error('[oauth] Businesses fetch error:', err.response?.data || err.message);
   }
 
-  // Step 3b: Fetch pages from business portfolios (owned + client pages)
   const pages = [];
   const seenIds = new Set();
 
   for (const biz of businesses) {
-    // Fetch owned pages
     for (const edge of ['owned_pages', 'client_pages']) {
       let nextUrl = `${META_API}/${biz.id}/${edge}?access_token=${encodeURIComponent(longToken)}&fields=id,name,access_token,instagram_business_account&limit=25`;
       try {
@@ -123,7 +142,6 @@ async function handleMetaCallback(code, mid) {
     }
   }
 
-  // Also fetch personal /me/accounts as fallback
   let nextUrl = `${META_API}/me/accounts?access_token=${encodeURIComponent(longToken)}&fields=id,name,access_token,instagram_business_account&limit=25`;
   try {
     while (nextUrl) {
@@ -145,19 +163,28 @@ async function handleMetaCallback(code, mid) {
     throw new Error('No Facebook Pages found. Make sure your account has access to pages through a Business Portfolio.');
   }
 
-  // Return pages list and user token so frontend can let user pick
-  return {
-    pages: pages.map(p => ({
-      id: p.id,
-      name: p.name,
-      accessToken: p.access_token,
-      business: p.business || null,
-      hasInstagram: !!p.instagram_business_account,
-      igUserId: p.instagram_business_account?.id || null,
-    })),
-    userToken: longToken,
-    mid,
-  };
+  return pages.map(p => ({
+    id: p.id,
+    name: p.name,
+    accessToken: p.access_token,
+    business: p.business || null,
+    hasInstagram: !!p.instagram_business_account,
+    igUserId: p.instagram_business_account?.id || null,
+  }));
+}
+
+async function handleMetaCallback(code, mid) {
+  const longToken = await exchangeMetaCodeForLongToken(code);
+  const pages = await fetchPagesForUserToken(longToken);
+  return { pages, userToken: longToken, mid };
+}
+
+// Bulk reconnect: exchange the code and list every Page this Facebook account
+// can manage. No DB writes — the caller decides which merchants to re-attach.
+async function handleMetaBulkCallback(code) {
+  const longToken = await exchangeMetaCodeForLongToken(code);
+  const pages = await fetchPagesForUserToken(longToken);
+  return { pages, userToken: longToken };
 }
 
 // Select a specific page after OAuth (called from frontend page picker)
@@ -432,7 +459,9 @@ async function testGoogleConnection(refreshToken, locationId) {
 
 module.exports = {
   getMetaAuthorizeUrl,
+  getMetaBulkAuthorizeUrl,
   handleMetaCallback,
+  handleMetaBulkCallback,
   selectMetaPage,
   listMetaPages,
   testFacebookConnection,
@@ -444,4 +473,5 @@ module.exports = {
   selectGoogleLocation,
   testGoogleConnection,
   BULK_OAUTH_STATE,
+  META_BULK_STATE,
 };
