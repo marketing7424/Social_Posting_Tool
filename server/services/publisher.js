@@ -304,9 +304,11 @@ async function getPublicImageUrl(pageId, accessToken, filePath) {
 }
 
 // Poll until an Instagram media container is ready to publish
+// 60 attempts x 3s = 180s, matching the Reels polling budget below.
+// 60s was too tight when multiple posts hit IG's processing queue at the same minute.
 async function waitForIgContainer(containerId, accessToken) {
-  for (let i = 0; i < 30; i++) {
-    await new Promise(r => setTimeout(r, 2000));
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 3000));
     try {
       const resp = await axios.get(`${META_API}/${containerId}`, {
         params: { fields: 'status_code', access_token: accessToken },

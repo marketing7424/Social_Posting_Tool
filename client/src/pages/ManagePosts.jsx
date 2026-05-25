@@ -836,6 +836,17 @@ export default function ManagePosts() {
             </Tooltip>
           )}
 
+          {(record.status === 'partial' || record.status === 'failed') && (
+            <Tooltip title="Retry failed platforms">
+              <Button
+                type="text"
+                size="small"
+                icon={<RetweetOutlined />}
+                onClick={() => handleRetry(record.id)}
+              />
+            </Tooltip>
+          )}
+
           {(record.status === 'draft' || record.status === 'scheduled') && (
             <Tooltip title="Delete">
               <Button

@@ -133,11 +133,18 @@ async function processScheduledPosts() {
     "SELECT * FROM posts WHERE status = 'scheduled' AND scheduled_time <= ?"
   ).all(now);
 
-  for (const post of posts) {
+  for (let postIdx = 0; postIdx < posts.length; postIdx++) {
+    const post = posts[postIdx];
     // Skip if already being published by a previous tick
     if (publishingPosts.has(post.id)) {
       console.log(`[scheduler] Skipping ${post.id} — already publishing`);
       continue;
+    }
+
+    // Stagger publishes so multiple posts scheduled for the same minute
+    // don't hammer Instagram's media-processing queue all at once.
+    if (postIdx > 0) {
+      await new Promise(r => setTimeout(r, 8000));
     }
 
     publishingPosts.add(post.id);
