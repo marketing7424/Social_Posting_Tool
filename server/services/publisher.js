@@ -307,29 +307,36 @@ async function getPublicImageUrl(pageId, accessToken, filePath) {
   return photoResp.data.images[0].source;
 }
 
-// Poll until an Instagram media container is ready to publish
-// 60 attempts x 3s = 180s, matching the Reels polling budget below.
-// 60s was too tight when multiple posts hit IG's processing queue at the same minute.
-// Per-poll axios timeout of 15s — without it a stalled Meta edge can silently
-// freeze the polling loop with no logs and the post sits in 'publishing' forever.
-async function waitForIgContainer(containerId, accessToken) {
-  for (let i = 0; i < 60; i++) {
-    await new Promise(r => setTimeout(r, 3000));
+// Publish an IG media container, retrying with backoff while it's still
+// processing. Replaces the old polling+publish flow: on at least some IG
+// Business accounts, GET /{container-id}?fields=status_code returns
+// "100/33 Authorization Error" even though the container is valid and
+// publishable. Skip the read entirely — just try to publish, and if IG
+// says "Media ID is not available" (still processing), wait and retry.
+async function publishIgContainer(igUserId, containerId, accessToken) {
+  // ~5-180s budget: initial 5s wait, then 30 attempts at 6s = up to 185s total.
+  for (let attempt = 0; attempt < 30; attempt++) {
+    await new Promise(r => setTimeout(r, attempt === 0 ? 5000 : 6000));
     try {
-      const resp = await axios.get(`${META_API}/${containerId}`, {
-        params: { fields: 'status_code', access_token: accessToken },
-        timeout: 15000,
-      });
-      console.log(`[publisher] IG container ${containerId} status: ${resp.data.status_code} (attempt ${i + 1}/60)`);
-      if (resp.data.status_code === 'FINISHED') return;
-      if (resp.data.status_code === 'ERROR') {
-        throw new Error('Instagram media processing failed');
-      }
+      const resp = await axios.post(`${META_API}/${igUserId}/media_publish`, {
+        creation_id: containerId,
+        access_token: accessToken,
+      }, { timeout: 30000 });
+      console.log(`[publisher] IG container ${containerId} published on attempt ${attempt + 1}: ${resp.data.id}`);
+      return resp.data.id;
     } catch (err) {
-      if (err.message === 'Instagram media processing failed') throw err;
       const apiErr = err.response?.data?.error;
-      const detail = apiErr ? `${apiErr.code}/${apiErr.error_subcode} ${apiErr.message}` : (err.code || err.message);
-      console.log(`[publisher] IG container ${containerId} poll error (attempt ${i + 1}/60): ${detail}`);
+      // Code 9007 / subcode 2207027 = "Media ID is not available" (still processing).
+      const stillProcessing =
+        apiErr?.code === 9007 ||
+        apiErr?.error_subcode === 2207027 ||
+        (apiErr?.message || '').toLowerCase().includes('not available');
+      if (stillProcessing) {
+        console.log(`[publisher] IG container ${containerId} not ready (attempt ${attempt + 1}/30): ${apiErr.message}`);
+        continue;
+      }
+      // Real error — surface it
+      throw err;
     }
   }
   throw new Error('Instagram media processing timed out');
@@ -417,30 +424,9 @@ async function publishToInstagram({ igUserId, accessToken, caption, mediaFiles, 
         timeout: 300000,
       });
 
-      // Step 3: Poll until video is processed
-      for (let i = 0; i < 60; i++) {
-        await new Promise(r => setTimeout(r, 3000));
-        try {
-          const statusResp = await axios.get(`${META_API}/${containerId}`, {
-            params: { fields: 'status_code', access_token: accessToken },
-          });
-          console.log(`[publisher] Instagram Reel status: ${statusResp.data.status_code}`);
-          if (statusResp.data.status_code === 'FINISHED') break;
-          if (statusResp.data.status_code === 'ERROR') {
-            throw new Error('Instagram video processing failed');
-          }
-        } catch (err) {
-          if (err.message === 'Instagram video processing failed') throw err;
-        }
-      }
-
-      // Step 4: Publish
-      const publishResp = await axios.post(`${META_API}/${igUserId}/media_publish`, {
-        creation_id: containerId,
-        access_token: accessToken,
-      });
-      console.log(`[publisher] Instagram Reel published: ${publishResp.data.id}`);
-      return { postId: publishResp.data.id };
+      // Step 3 + 4: Publish with retry while still processing.
+      const reelId = await publishIgContainer(igUserId, containerId, accessToken);
+      return { postId: reelId };
     }
 
     if (!mediaFiles || mediaFiles.length === 0) {
@@ -466,15 +452,9 @@ async function publishToInstagram({ igUserId, accessToken, caption, mediaFiles, 
         access_token: accessToken,
       }, { timeout: 30000 });
 
-      console.log(`[publisher] IG container created: ${createResp.data.id}, polling...`);
-      await waitForIgContainer(createResp.data.id, accessToken);
-
-      const publishResp = await axios.post(`${META_API}/${igUserId}/media_publish`, {
-        creation_id: createResp.data.id,
-        access_token: accessToken,
-      }, { timeout: 30000 });
-      console.log(`[publisher] IG single image published: ${publishResp.data.id}`);
-      return { postId: publishResp.data.id };
+      console.log(`[publisher] IG container created: ${createResp.data.id}, publishing...`);
+      const mediaId = await publishIgContainer(igUserId, createResp.data.id, accessToken);
+      return { postId: mediaId };
     }
 
     // Carousel - reuse Facebook CDN URLs if available, otherwise upload temporarily
@@ -498,29 +478,23 @@ async function publishToInstagram({ igUserId, accessToken, caption, mediaFiles, 
         image_url: imageUrl,
         is_carousel_item: true,
         access_token: accessToken,
-      });
+      }, { timeout: 30000 });
       childIds.push(resp.data.id);
     }
 
-    // Wait for all carousel items to finish processing
-    for (const childId of childIds) {
-      await waitForIgContainer(childId, accessToken);
-    }
+    // Small wait so each child container is processable before being attached.
+    // (We don't poll status — see publishIgContainer for why.)
+    await new Promise(r => setTimeout(r, 10000));
 
     const carouselResp = await axios.post(`${META_API}/${igUserId}/media`, {
       media_type: 'CAROUSEL',
       children: childIds.join(','),
       caption,
       access_token: accessToken,
-    });
+    }, { timeout: 30000 });
 
-    await waitForIgContainer(carouselResp.data.id, accessToken);
-
-    const publishResp = await axios.post(`${META_API}/${igUserId}/media_publish`, {
-      creation_id: carouselResp.data.id,
-      access_token: accessToken,
-    });
-    return { postId: publishResp.data.id };
+    const carouselId = await publishIgContainer(igUserId, carouselResp.data.id, accessToken);
+    return { postId: carouselId };
   });
 }
 
