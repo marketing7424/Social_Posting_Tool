@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
-const ACCESS_TOKEN_EXPIRY = '1h';
+const ACCESS_TOKEN_EXPIRY = '3h';
 const REFRESH_TOKEN_EXPIRY = '7d';
 
 function generateTokens(user) {
