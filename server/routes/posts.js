@@ -362,33 +362,17 @@ router.post('/:id/schedule', (req, res) => {
   res.json({ success: true, scheduledTime });
 });
 
-// POST /api/posts/:id/retry - retry failed platform posts
-router.post('/:id/retry', async (req, res) => {
+// Actual retry work — runs in background after the route has responded.
+// Reads the pending platforms (already flipped from 'failed' by the route),
+// publishes each one sequentially, and updates the post's overall status.
+async function retryInBackground(postId) {
   const db = getDb();
-  const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(req.params.id);
-  if (!post) return res.status(404).json({ error: 'Post not found' });
+  const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(postId);
+  if (!post) return;
 
-  if (post.status === 'publishing') {
-    return res.json({ status: 'publishing', message: 'Already publishing, please wait' });
-  }
-
-  // Only retry platforms that actually failed
-  const failedPlatforms = db.prepare(
-    "SELECT * FROM post_platforms WHERE post_id = ? AND status = 'failed'"
+  const platforms = db.prepare(
+    "SELECT * FROM post_platforms WHERE post_id = ? AND status = 'pending'"
   ).all(post.id);
-
-  if (failedPlatforms.length === 0) {
-    return res.json({ status: post.status, message: 'No failed platforms to retry' });
-  }
-
-  // Reset failed platforms back to pending
-  db.prepare(
-    "UPDATE post_platforms SET status = 'pending', error = NULL WHERE post_id = ? AND status = 'failed'"
-  ).run(post.id);
-
-  db.prepare("UPDATE posts SET status = 'publishing' WHERE id = ?").run(post.id);
-
-  const platforms = failedPlatforms;
 
   const media = db.prepare(
     'SELECT filename, mimetype FROM post_media WHERE post_id = ? ORDER BY sort_order'
@@ -400,7 +384,6 @@ router.post('/:id/retry', async (req, res) => {
 
   const merchant = getMerchantFromDb(post.merchant_mid);
 
-  const results = {};
   let allSuccess = true;
   let anySuccess = false;
 
@@ -437,7 +420,6 @@ router.post('/:id/retry', async (req, res) => {
 
       db.prepare("UPDATE post_platforms SET status = 'success', platform_post_id = ?, published_at = datetime('now') WHERE id = ?")
         .run(result?.postId || null, pp.id);
-      results[pp.platform] = { status: 'success', postId: result?.postId };
       anySuccess = true;
     } catch (err) {
       allSuccess = false;
@@ -445,20 +427,54 @@ router.post('/:id/retry', async (req, res) => {
       console.error(`[publish-retry] ${pp.platform} error:`, errMsg);
       db.prepare("UPDATE post_platforms SET status = 'failed', error = ? WHERE id = ?")
         .run(errMsg, pp.id);
-      results[pp.platform] = { status: 'failed', error: errMsg };
     }
   }
 
-  // Also check already-successful platforms
+  // Roll already-successful platforms into the final status so a post with
+  // FB ✓ / Google ✓ and a successful IG retry ends up as 'success', not 'partial'.
   const successPlatforms = db.prepare(
-    "SELECT * FROM post_platforms WHERE post_id = ? AND status = 'success'"
-  ).all(post.id);
-  if (successPlatforms.length > 0) anySuccess = true;
+    "SELECT 1 FROM post_platforms WHERE post_id = ? AND status = 'success' LIMIT 1"
+  ).get(post.id);
+  if (successPlatforms) anySuccess = true;
 
   const finalStatus = allSuccess ? 'success' : anySuccess ? 'partial' : 'failed';
   db.prepare('UPDATE posts SET status = ? WHERE id = ?').run(finalStatus, post.id);
+  console.log(`[publish-retry] Post ${post.id} finished: ${finalStatus}`);
+}
 
-  res.json({ status: finalStatus, results });
+// POST /api/posts/:id/retry - kicks off a background retry of failed platforms
+// and returns immediately. Client polls GET /api/posts/:id/status to know when
+// it's done. Synchronous version was held open >60s and Fly's proxy dropped it.
+router.post('/:id/retry', (req, res) => {
+  const db = getDb();
+  const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(req.params.id);
+  if (!post) return res.status(404).json({ error: 'Post not found' });
+
+  if (post.status === 'publishing') {
+    return res.json({ status: 'publishing', message: 'Already publishing, please wait' });
+  }
+
+  const failedPlatforms = db.prepare(
+    "SELECT id FROM post_platforms WHERE post_id = ? AND status = 'failed'"
+  ).all(post.id);
+
+  if (failedPlatforms.length === 0) {
+    return res.json({ status: post.status, message: 'No failed platforms to retry' });
+  }
+
+  // Flip failed → pending and mark the post as publishing before responding.
+  db.prepare(
+    "UPDATE post_platforms SET status = 'pending', error = NULL WHERE post_id = ? AND status = 'failed'"
+  ).run(post.id);
+  db.prepare("UPDATE posts SET status = 'publishing' WHERE id = ?").run(post.id);
+
+  // Fire and forget — actual retry runs in background.
+  retryInBackground(post.id).catch(err => {
+    console.error('[publish-retry] Background error:', err.message);
+    db.prepare("UPDATE posts SET status = 'failed' WHERE id = ?").run(post.id);
+  });
+
+  res.json({ status: 'publishing', message: 'Retry started in background' });
 });
 
 // Recompute a post's overall status from its post_platforms rows.

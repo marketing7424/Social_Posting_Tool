@@ -39,6 +39,7 @@ import {
   updatePost,
   deletePost,
   retryPost,
+  getPostStatus,
   publishPost,
   schedulePost,
   createPost,
@@ -348,10 +349,32 @@ export default function ManagePosts() {
     }
   };
 
+  // Wait for a post that's currently 'publishing' to settle.
+  // Polls /status every 3s for up to 4 minutes — long enough for IG's 180s
+  // container processing plus a margin for FB/Google legs.
+  const pollUntilDone = async (postId, maxAttempts = 80, interval = 3000) => {
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(r => setTimeout(r, interval));
+      try {
+        const s = await getPostStatus(postId);
+        if (s.status !== 'publishing') return s;
+      } catch { /* keep polling */ }
+    }
+    return null;
+  };
+
   const handleRetry = async (id) => {
     try {
       await retryPost(id);
-      message.success('Retrying post...');
+      message.success('Retry started...');
+      // Refresh once to flip the row to 'publishing', then again when settled.
+      fetchPosts();
+      const final = await pollUntilDone(id);
+      if (final) {
+        message.success(`Retry finished: ${final.status}`);
+      } else {
+        message.warning('Retry still running — refresh in a moment to see the result');
+      }
       fetchPosts();
     } catch {
       message.error('Retry failed');
@@ -376,20 +399,28 @@ export default function ManagePosts() {
     setBulkRetryOpen(true);
     setBulkRetryRunning(true);
 
-    // Sequential so the server processes one Instagram container at a time.
-    // No extra stagger needed — each retryPost awaits IG polling (~30-180s)
-    // before the next one starts.
+    // Sequential: kick off retry (returns immediately now), then poll /status
+    // until it settles before moving to the next post. This keeps only one IG
+    // container processing on the server at a time.
     for (const post of queue) {
       setBulkRetryStates(prev => ({
         ...prev,
         [post.id]: { status: 'publishing' },
       }));
       try {
-        const result = await retryPost(post.id);
-        setBulkRetryStates(prev => ({
-          ...prev,
-          [post.id]: { status: result.status || 'success', results: result.results },
-        }));
+        await retryPost(post.id);
+        const final = await pollUntilDone(post.id);
+        if (final) {
+          setBulkRetryStates(prev => ({
+            ...prev,
+            [post.id]: { status: final.status, results: final.results },
+          }));
+        } else {
+          setBulkRetryStates(prev => ({
+            ...prev,
+            [post.id]: { status: 'failed', error: 'Still publishing after 4 minutes — check back later' },
+          }));
+        }
       } catch (err) {
         setBulkRetryStates(prev => ({
           ...prev,
