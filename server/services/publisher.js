@@ -327,7 +327,9 @@ async function waitForIgContainer(containerId, accessToken) {
       }
     } catch (err) {
       if (err.message === 'Instagram media processing failed') throw err;
-      console.log(`[publisher] IG container ${containerId} poll error (attempt ${i + 1}/60): ${err.code || err.message}`);
+      const apiErr = err.response?.data?.error;
+      const detail = apiErr ? `${apiErr.code}/${apiErr.error_subcode} ${apiErr.message}` : (err.code || err.message);
+      console.log(`[publisher] IG container ${containerId} poll error (attempt ${i + 1}/60): ${detail}`);
     }
   }
   throw new Error('Instagram media processing timed out');
