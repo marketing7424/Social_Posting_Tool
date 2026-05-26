@@ -101,6 +101,7 @@ const STATUS_OPTIONS = [
   { label: 'Draft', value: 'draft' },
   { label: 'Pending', value: 'pending' },
   { label: 'Scheduled', value: 'scheduled' },
+  { label: 'Publishing', value: 'publishing' },
   { label: 'Published', value: 'success' },
   { label: 'Partial', value: 'partial' },
   { label: 'Failed', value: 'failed' },
@@ -114,7 +115,7 @@ export default function ManagePosts() {
   const [loading, setLoading] = useState(false);
 
   // Filter state
-  const DEFAULT_EXCLUDE = ['draft', 'failed', 'deleted', 'publishing'];
+  const DEFAULT_EXCLUDE = ['draft', 'failed', 'deleted'];
   const [filters, setFilters] = useState({
     merchant: undefined,
     platform: undefined,
