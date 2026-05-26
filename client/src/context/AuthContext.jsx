@@ -1,9 +1,15 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import axios from 'axios';
 import { Modal, Button } from 'antd';
 import { ClockCircleOutlined } from '@ant-design/icons';
 import api from '../api/client';
 
 const AuthContext = createContext(null);
+
+const IDLE_TIMEOUT_MS = 3 * 60 * 60 * 1000;
+const TOKEN_REFRESH_BUFFER_MS = 60 * 1000;
+const CHECK_INTERVAL_MS = 30 * 1000;
+const ACTIVITY_EVENTS = ['mousedown', 'keydown', 'scroll', 'touchstart'];
 
 function getTokenExpMs(token) {
   try {
@@ -19,30 +25,75 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sessionExpired, setSessionExpired] = useState(false);
-  const timeoutRef = useRef(null);
+  const lastActivityRef = useRef(Date.now());
+  const refreshingRef = useRef(false);
 
-  const clearExpiryTimer = useCallback(() => {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
+  const markActivity = useCallback(() => {
+    lastActivityRef.current = Date.now();
+  }, []);
+
+  const silentRefresh = useCallback(async () => {
+    if (refreshingRef.current) return;
+    const refreshToken = localStorage.getItem('refreshToken');
+    if (!refreshToken) return;
+    refreshingRef.current = true;
+    try {
+      const baseURL = import.meta.env.VITE_API_URL || '/api';
+      const res = await axios.post(`${baseURL}/auth/refresh`, { refreshToken });
+      localStorage.setItem('accessToken', res.data.accessToken);
+      localStorage.setItem('refreshToken', res.data.refreshToken);
+      api.defaults.headers.common['Authorization'] = `Bearer ${res.data.accessToken}`;
+    } catch {
+      // ignore — axios response interceptor handles 401 on the next real request
+    } finally {
+      refreshingRef.current = false;
     }
   }, []);
 
-  const scheduleExpiry = useCallback(() => {
-    clearExpiryTimer();
-    const token = localStorage.getItem('accessToken');
-    if (!token) return;
-    const expMs = getTokenExpMs(token);
-    if (!expMs) return;
-    const delay = expMs - Date.now();
-    if (delay <= 0) {
-      setSessionExpired(true);
-      return;
-    }
-    timeoutRef.current = setTimeout(() => {
-      setSessionExpired(true);
-    }, delay);
-  }, [clearExpiryTimer]);
+  // Track user activity once logged in
+  useEffect(() => {
+    if (!user) return;
+    ACTIVITY_EVENTS.forEach(ev =>
+      window.addEventListener(ev, markActivity, { passive: true })
+    );
+    return () => {
+      ACTIVITY_EVENTS.forEach(ev =>
+        window.removeEventListener(ev, markActivity)
+      );
+    };
+  }, [user, markActivity]);
+
+  // Periodic check: idle-timeout modal + proactive silent token refresh
+  useEffect(() => {
+    if (!user || sessionExpired) return;
+
+    const tick = () => {
+      const now = Date.now();
+      if (now - lastActivityRef.current >= IDLE_TIMEOUT_MS) {
+        setSessionExpired(true);
+        return;
+      }
+      const token = localStorage.getItem('accessToken');
+      if (!token) return;
+      const expMs = getTokenExpMs(token);
+      if (!expMs) return;
+      if (expMs - now < TOKEN_REFRESH_BUFFER_MS) {
+        silentRefresh();
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, CHECK_INTERVAL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') tick();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [user, sessionExpired, silentRefresh]);
 
   useEffect(() => {
     const token = localStorage.getItem('accessToken');
@@ -51,7 +102,7 @@ export function AuthProvider({ children }) {
       api.get('/auth/me')
         .then(res => {
           setUser(res.data);
-          scheduleExpiry();
+          lastActivityRef.current = Date.now();
         })
         .catch(() => {
           localStorage.removeItem('accessToken');
@@ -62,9 +113,7 @@ export function AuthProvider({ children }) {
     } else {
       setLoading(false);
     }
-
-    return clearExpiryTimer;
-  }, [scheduleExpiry, clearExpiryTimer]);
+  }, []);
 
   const login = useCallback(async (email, password) => {
     const res = await api.post('/auth/login', { email, password });
@@ -74,18 +123,17 @@ export function AuthProvider({ children }) {
     api.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`;
     setUser(userData);
     setSessionExpired(false);
-    scheduleExpiry();
+    lastActivityRef.current = Date.now();
     return userData;
-  }, [scheduleExpiry]);
+  }, []);
 
   const logout = useCallback(() => {
-    clearExpiryTimer();
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
     delete api.defaults.headers.common['Authorization'];
     setUser(null);
     setSessionExpired(false);
-  }, [clearExpiryTimer]);
+  }, []);
 
   return (
     <AuthContext.Provider value={{ user, loading, login, logout }}>
@@ -105,7 +153,7 @@ export function AuthProvider({ children }) {
         }
       >
         <p style={{ marginBottom: 16 }}>
-          Phiên đăng nhập đã hết hạn sau 3 giờ. Vui lòng refresh trang để tiếp tục sử dụng.
+          Bạn đã không sử dụng app trong 3 giờ. Vui lòng refresh trang để tiếp tục sử dụng.
         </p>
         <div style={{ textAlign: 'right' }}>
           <Button type="primary" size="large" onClick={() => window.location.reload()}>
