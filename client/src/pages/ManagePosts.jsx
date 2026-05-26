@@ -144,6 +144,12 @@ export default function ManagePosts() {
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [batchStatus, setBatchStatus] = useState(undefined);
 
+  // Bulk retry modal state
+  const [bulkRetryOpen, setBulkRetryOpen] = useState(false);
+  const [bulkRetryStates, setBulkRetryStates] = useState({});
+  const [bulkRetryRunning, setBulkRetryRunning] = useState(false);
+  const [bulkRetryQueue, setBulkRetryQueue] = useState([]);
+
   // Repost modal state
   const [repostModalOpen, setRepostModalOpen] = useState(false);
   const [repostingPost, setRepostingPost] = useState(null);
@@ -350,6 +356,50 @@ export default function ManagePosts() {
     } catch {
       message.error('Retry failed');
     }
+  };
+
+  const handleBulkRetry = async () => {
+    // Only retry selected posts that are actually retryable
+    const queue = posts.filter(p =>
+      selectedRowKeys.includes(p.id) &&
+      (p.status === 'partial' || p.status === 'failed')
+    );
+    if (queue.length === 0) {
+      message.info('No failed or partial posts selected');
+      return;
+    }
+
+    setBulkRetryQueue(queue);
+    const initial = {};
+    queue.forEach(p => { initial[p.id] = { status: 'queued' }; });
+    setBulkRetryStates(initial);
+    setBulkRetryOpen(true);
+    setBulkRetryRunning(true);
+
+    // Sequential so the server processes one Instagram container at a time.
+    // No extra stagger needed — each retryPost awaits IG polling (~30-180s)
+    // before the next one starts.
+    for (const post of queue) {
+      setBulkRetryStates(prev => ({
+        ...prev,
+        [post.id]: { status: 'publishing' },
+      }));
+      try {
+        const result = await retryPost(post.id);
+        setBulkRetryStates(prev => ({
+          ...prev,
+          [post.id]: { status: result.status || 'success', results: result.results },
+        }));
+      } catch (err) {
+        setBulkRetryStates(prev => ({
+          ...prev,
+          [post.id]: { status: 'failed', error: err?.message || 'Retry failed' },
+        }));
+      }
+    }
+
+    setBulkRetryRunning(false);
+    fetchPosts();
   };
 
   const handlePublishNow = async (id) => {
@@ -1001,6 +1051,24 @@ export default function ManagePosts() {
             >
               Reschedule
             </Button>
+            {(() => {
+              const retryableCount = posts.filter(p =>
+                selectedRowKeys.includes(p.id) &&
+                (p.status === 'partial' || p.status === 'failed')
+              ).length;
+              if (retryableCount === 0) return null;
+              return (
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<RetweetOutlined />}
+                  onClick={handleBulkRetry}
+                  loading={bulkRetryRunning}
+                >
+                  Retry {retryableCount} Failed
+                </Button>
+              );
+            })()}
             <Button size="small" type="link" onClick={() => setSelectedRowKeys([])}>
               Clear Selection
             </Button>
@@ -1169,6 +1237,74 @@ export default function ManagePosts() {
           onChange={(e) => setRescheduleTime(e.target.value ? dayjs(e.target.value) : null)}
           style={{ width: '100%', height: 40, borderRadius: 8, border: '1px solid #d9d9d9', padding: '0 12px', fontSize: 14 }}
         />
+      </Modal>
+
+      {/* Bulk Retry Progress Modal */}
+      <Modal
+        title={`Retry ${bulkRetryQueue.length} post${bulkRetryQueue.length > 1 ? 's' : ''}`}
+        open={bulkRetryOpen}
+        onCancel={() => { if (!bulkRetryRunning) setBulkRetryOpen(false); }}
+        closable={!bulkRetryRunning}
+        maskClosable={false}
+        footer={
+          bulkRetryRunning ? (
+            <Text type="secondary">Publishing... please keep this window open.</Text>
+          ) : (
+            <Button type="primary" onClick={() => setBulkRetryOpen(false)}>Close</Button>
+          )
+        }
+        width={560}
+      >
+        <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+          {bulkRetryQueue.map(post => {
+            const state = bulkRetryStates[post.id] || { status: 'queued' };
+            let tag;
+            if (state.status === 'queued') {
+              tag = <Tag>Queued</Tag>;
+            } else if (state.status === 'publishing') {
+              tag = <Tag icon={<LoadingOutlined spin />} color="processing">Publishing</Tag>;
+            } else if (state.status === 'success') {
+              tag = <Tag color="green">Success</Tag>;
+            } else if (state.status === 'partial') {
+              tag = <Tag color="warning">Partial</Tag>;
+            } else {
+              tag = <Tag color="red">Failed</Tag>;
+            }
+            // Per-platform results if returned by the retry route
+            const perPlatform = state.results
+              ? Object.entries(state.results).map(([plat, r]) => (
+                  <Tag
+                    key={plat}
+                    color={r.status === 'success' ? 'green' : 'red'}
+                    style={{ marginRight: 4 }}
+                  >
+                    {plat} {r.status === 'success' ? '✓' : '✗'}
+                  </Tag>
+                ))
+              : null;
+            return (
+              <div
+                key={post.id}
+                style={{
+                  padding: '10px 0',
+                  borderBottom: '1px solid #f0f0f0',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                }}
+              >
+                <Space>
+                  {tag}
+                  <Text strong>{getMerchantName(post.merchant_mid)}</Text>
+                </Space>
+                {perPlatform && <div>{perPlatform}</div>}
+                {state.error && (
+                  <Text type="danger" style={{ fontSize: 12 }}>{state.error}</Text>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </Modal>
 
       {/* Batch Status Update Modal */}
