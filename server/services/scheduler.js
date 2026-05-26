@@ -28,7 +28,41 @@ function getMerchantFromDb(mid) {
   };
 }
 
+// Posts whose publish was killed mid-flight by a deploy or crash get left in
+// status='publishing' with some platforms still 'pending'. The retry route
+// refuses to touch them because of the 'publishing' guard, so they stay stuck
+// forever. On startup we settle them: mark any still-pending platforms as
+// failed (so the user knows to retry), then recompute the post's overall
+// status from its platform rows.
+function recoverStuckPublishing() {
+  const db = getDb();
+  const stuck = db.prepare("SELECT id FROM posts WHERE status = 'publishing'").all();
+  if (stuck.length === 0) return;
+
+  console.log(`[scheduler] Recovering ${stuck.length} post(s) stuck in 'publishing'`);
+
+  db.prepare(
+    "UPDATE post_platforms SET status = 'failed', error = ? " +
+    "WHERE status = 'pending' AND post_id IN (SELECT id FROM posts WHERE status = 'publishing')"
+  ).run('Interrupted by server restart - please retry');
+
+  for (const p of stuck) {
+    const plats = db.prepare(
+      "SELECT status FROM post_platforms WHERE post_id = ?"
+    ).all(p.id);
+    const anyFail = plats.some(x => x.status === 'failed');
+    const anySuccess = plats.some(x => x.status === 'success');
+    const newStatus = !anyFail ? 'success' : anySuccess ? 'partial' : 'failed';
+    db.prepare('UPDATE posts SET status = ? WHERE id = ?').run(newStatus, p.id);
+  }
+}
+
 function initScheduler() {
+  // Recover any posts left in 'publishing' state from a prior crash/deploy
+  try { recoverStuckPublishing(); } catch (err) {
+    console.error('[scheduler] Recovery error:', err.message);
+  }
+
   // Run every minute
   cron.schedule('* * * * *', async () => {
     try {
