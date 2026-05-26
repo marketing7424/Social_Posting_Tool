@@ -310,20 +310,24 @@ async function getPublicImageUrl(pageId, accessToken, filePath) {
 // Poll until an Instagram media container is ready to publish
 // 60 attempts x 3s = 180s, matching the Reels polling budget below.
 // 60s was too tight when multiple posts hit IG's processing queue at the same minute.
+// Per-poll axios timeout of 15s — without it a stalled Meta edge can silently
+// freeze the polling loop with no logs and the post sits in 'publishing' forever.
 async function waitForIgContainer(containerId, accessToken) {
   for (let i = 0; i < 60; i++) {
     await new Promise(r => setTimeout(r, 3000));
     try {
       const resp = await axios.get(`${META_API}/${containerId}`, {
         params: { fields: 'status_code', access_token: accessToken },
+        timeout: 15000,
       });
-      console.log(`[publisher] IG container ${containerId} status: ${resp.data.status_code}`);
+      console.log(`[publisher] IG container ${containerId} status: ${resp.data.status_code} (attempt ${i + 1}/60)`);
       if (resp.data.status_code === 'FINISHED') return;
       if (resp.data.status_code === 'ERROR') {
         throw new Error('Instagram media processing failed');
       }
     } catch (err) {
       if (err.message === 'Instagram media processing failed') throw err;
+      console.log(`[publisher] IG container ${containerId} poll error (attempt ${i + 1}/60): ${err.code || err.message}`);
     }
   }
   throw new Error('Instagram media processing timed out');
