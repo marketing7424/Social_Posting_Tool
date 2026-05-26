@@ -292,14 +292,18 @@ async function publishToFacebook({ pageId, accessToken, caption, mediaFiles, lay
 async function getPublicImageUrl(pageId, accessToken, filePath) {
   const form = buildUploadForm(filePath, accessToken, { published: 'false', temporary: 'true' });
 
+  console.log(`[publisher] Uploading temp photo to FB page ${pageId} for IG retry...`);
   const resp = await axios.post(`${META_API}/${pageId}/photos`, form, {
     headers: form.getHeaders(),
+    timeout: 60000,
   });
 
   const photoResp = await axios.get(`${META_API}/${resp.data.id}`, {
     params: { fields: 'images', access_token: accessToken },
+    timeout: 30000,
   });
 
+  console.log(`[publisher] Temp photo uploaded, got CDN url`);
   return photoResp.data.images[0].source;
 }
 
@@ -449,18 +453,21 @@ async function publishToInstagram({ igUserId, accessToken, caption, mediaFiles, 
         if (croppedPath !== originalPath) try { fs.unlinkSync(croppedPath); } catch (_) {}
       }
 
+      console.log(`[publisher] Creating IG single-image container...`);
       const createResp = await axios.post(`${META_API}/${igUserId}/media`, {
         image_url: imageUrl,
         caption,
         access_token: accessToken,
-      });
+      }, { timeout: 30000 });
 
+      console.log(`[publisher] IG container created: ${createResp.data.id}, polling...`);
       await waitForIgContainer(createResp.data.id, accessToken);
 
       const publishResp = await axios.post(`${META_API}/${igUserId}/media_publish`, {
         creation_id: createResp.data.id,
         access_token: accessToken,
-      });
+      }, { timeout: 30000 });
+      console.log(`[publisher] IG single image published: ${publishResp.data.id}`);
       return { postId: publishResp.data.id };
     }
 

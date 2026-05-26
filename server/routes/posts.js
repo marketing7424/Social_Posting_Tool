@@ -374,6 +374,8 @@ async function retryInBackground(postId) {
     "SELECT * FROM post_platforms WHERE post_id = ? AND status = 'pending'"
   ).all(post.id);
 
+  console.log(`[publish-retry] Starting post ${postId}, platforms: ${platforms.map(p => p.platform).join(',')}`);
+
   const media = db.prepare(
     'SELECT filename, mimetype FROM post_media WHERE post_id = ? ORDER BY sort_order'
   ).all(post.id);
