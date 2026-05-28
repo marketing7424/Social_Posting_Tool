@@ -163,15 +163,37 @@ async function processScheduledPosts() {
   const db = getDb();
   const now = new Date().toISOString();
 
+  // Atomic claim: only the caller whose conditional UPDATE actually changes a
+  // row gets to publish that post. Protects against concurrent ticks and any
+  // future multi-process setup. Returns the rows that this caller now owns.
+  const claim = db.transaction((nowIso) => {
+    const candidates = db.prepare(
+      "SELECT id FROM posts WHERE status = 'scheduled' AND scheduled_time <= ?"
+    ).all(nowIso);
+    const claimedIds = [];
+    for (const c of candidates) {
+      const r = db.prepare(
+        "UPDATE posts SET status = 'publishing' WHERE id = ? AND status = 'scheduled'"
+      ).run(c.id);
+      if (r.changes === 1) claimedIds.push(c.id);
+    }
+    return claimedIds;
+  });
+
+  const claimedIds = claim(now);
+  if (claimedIds.length === 0) return;
+
+  const placeholders = claimedIds.map(() => '?').join(',');
   const posts = db.prepare(
-    "SELECT * FROM posts WHERE status = 'scheduled' AND scheduled_time <= ?"
-  ).all(now);
+    `SELECT * FROM posts WHERE id IN (${placeholders})`
+  ).all(...claimedIds);
 
   for (let postIdx = 0; postIdx < posts.length; postIdx++) {
     const post = posts[postIdx];
-    // Skip if already being published by a previous tick
+    // Belt-and-suspenders: in-memory guard against a second async invocation
+    // of processScheduledPosts on the same Node process.
     if (publishingPosts.has(post.id)) {
-      console.log(`[scheduler] Skipping ${post.id} — already publishing`);
+      console.log(`[scheduler] Skipping ${post.id} — already publishing in-process`);
       continue;
     }
 
@@ -182,7 +204,6 @@ async function processScheduledPosts() {
     }
 
     publishingPosts.add(post.id);
-    db.prepare("UPDATE posts SET status = 'publishing' WHERE id = ?").run(post.id);
 
     const platforms = db.prepare(
       "SELECT * FROM post_platforms WHERE post_id = ? AND status = 'pending'"

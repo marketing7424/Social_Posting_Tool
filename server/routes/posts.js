@@ -314,14 +314,19 @@ async function publishInBackground(postId) {
 // POST /api/posts/:id/publish — returns immediately, publishes in background
 router.post('/:id/publish', (req, res) => {
   const db = getDb();
-  const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(req.params.id);
+  const post = db.prepare('SELECT id FROM posts WHERE id = ?').get(req.params.id);
   if (!post) return res.status(404).json({ error: 'Post not found' });
 
-  if (post.status === 'publishing') {
+  // Atomic claim: only the request whose UPDATE actually transitions the row
+  // into 'publishing' is allowed to fire the background job. Closes the
+  // TOCTOU window where two near-simultaneous /publish calls (double-click,
+  // browser retry) both passed a status check and both kicked off publishing.
+  const r = db.prepare(
+    "UPDATE posts SET status = 'publishing' WHERE id = ? AND status != 'publishing'"
+  ).run(post.id);
+  if (r.changes === 0) {
     return res.json({ status: 'publishing', message: 'Already publishing, please wait' });
   }
-
-  db.prepare("UPDATE posts SET status = 'publishing' WHERE id = ?").run(post.id);
 
   // Fire and forget — publish in background
   publishInBackground(post.id).catch(err => {
@@ -449,10 +454,15 @@ async function retryInBackground(postId) {
 // it's done. Synchronous version was held open >60s and Fly's proxy dropped it.
 router.post('/:id/retry', (req, res) => {
   const db = getDb();
-  const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(req.params.id);
+  const post = db.prepare('SELECT id FROM posts WHERE id = ?').get(req.params.id);
   if (!post) return res.status(404).json({ error: 'Post not found' });
 
-  if (post.status === 'publishing') {
+  // Atomic claim into 'publishing' so concurrent retry clicks can't both
+  // flip platforms from failed → pending and both fire retryInBackground.
+  const claim = db.prepare(
+    "UPDATE posts SET status = 'publishing' WHERE id = ? AND status != 'publishing'"
+  ).run(post.id);
+  if (claim.changes === 0) {
     return res.json({ status: 'publishing', message: 'Already publishing, please wait' });
   }
 
@@ -461,14 +471,17 @@ router.post('/:id/retry', (req, res) => {
   ).all(post.id);
 
   if (failedPlatforms.length === 0) {
+    // Roll the post status back since there's nothing to retry.
+    db.prepare(
+      "UPDATE posts SET status = COALESCE(NULLIF(previous_status, ''), 'failed') WHERE id = ?"
+    ).run(post.id);
     return res.json({ status: post.status, message: 'No failed platforms to retry' });
   }
 
-  // Flip failed → pending and mark the post as publishing before responding.
+  // Flip failed → pending (post.status is already 'publishing' from claim).
   db.prepare(
     "UPDATE post_platforms SET status = 'pending', error = NULL WHERE post_id = ? AND status = 'failed'"
   ).run(post.id);
-  db.prepare("UPDATE posts SET status = 'publishing' WHERE id = ?").run(post.id);
 
   // Fire and forget — actual retry runs in background.
   retryInBackground(post.id).catch(err => {

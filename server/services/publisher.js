@@ -142,7 +142,10 @@ async function cropHeroImage(filePath, targetRatio) {
 async function publishToFacebook({ pageId, accessToken, caption, mediaFiles, layout, layoutVariant = 0, videoFile }) {
   if (!pageId || !accessToken) throw new Error('Facebook credentials not configured');
 
-  return withRetry(async () => {
+  // No outer retry: each branch makes the post-creating API call directly, so
+  // a retry on network timeout would risk creating a duplicate post on
+  // Facebook's side. Surface errors to the caller — manual retry is safer.
+  const run = async () => {
     // Video post — upload via Facebook Reels API (3-step resumable upload)
     if (videoFile) {
       const filePath = path.join(UPLOADS_DIR, videoFile);
@@ -284,7 +287,20 @@ async function publishToFacebook({ pageId, accessToken, caption, mediaFiles, lay
 
     const resp = await axios.post(`${META_API}/${pageId}/feed`, params);
     return { postId: resp.data.id, imageUrls };
-  });
+  };
+
+  try {
+    return await run();
+  } catch (err) {
+    // Surface the Meta API error message for the caller.
+    const apiError = err.response?.data?.error;
+    if (apiError) {
+      const detail = apiError.error_user_msg || apiError.message || JSON.stringify(apiError);
+      err.message = `${err.message}: ${detail}`;
+      console.error('[publisher] FB API error detail:', JSON.stringify(apiError));
+    }
+    throw err;
+  }
 }
 
 // Upload a local file to Facebook as unpublished photo and get its public URL.
@@ -390,7 +406,12 @@ async function ensureInstagramAspectRatio(filePath) {
 async function publishToInstagram({ igUserId, accessToken, caption, mediaFiles, videoFile, fbPageId, fbImageUrls }) {
   if (!igUserId || !accessToken) throw new Error('Instagram credentials not configured');
 
-  return withRetry(async () => {
+  // No outer retry: publishIgContainer already retries while the media is
+  // still processing. Wrapping the whole function in withRetry caused
+  // duplicates whenever media_publish succeeded but the response was lost
+  // (Fly proxy ~60s, axios timeout 30s) — the retry would create a new
+  // container and publish it as a second IG post.
+  const run = async () => {
     // Video post — publish as Instagram Reel using resumable upload
     if (videoFile) {
       const filePath = path.join(UPLOADS_DIR, videoFile);
@@ -495,7 +516,19 @@ async function publishToInstagram({ igUserId, accessToken, caption, mediaFiles, 
 
     const carouselId = await publishIgContainer(igUserId, carouselResp.data.id, accessToken);
     return { postId: carouselId };
-  });
+  };
+
+  try {
+    return await run();
+  } catch (err) {
+    const apiError = err.response?.data?.error;
+    if (apiError) {
+      const detail = apiError.error_user_msg || apiError.message || JSON.stringify(apiError);
+      err.message = `${err.message}: ${detail}`;
+      console.error('[publisher] IG API error detail:', JSON.stringify(apiError));
+    }
+    throw err;
+  }
 }
 
 async function getGoogleAccessToken(refreshToken) {
@@ -524,7 +557,9 @@ async function publishToGoogle({ accessToken, locationId, caption, mediaFiles, g
     if (!googleTitle) throw new Error(`Title is required for ${postType} posts`);
     if (!googleStartDate || !googleEndDate) throw new Error(`Start and end dates are required for ${postType} posts`);
 
-    return withRetry(async () => {
+    {
+      // No retry: this POST creates the post on Google's side. Retrying on
+      // a dropped response would create a duplicate Google Business post.
       const startParts = googleStartDate.split('-'); // YYYY-MM-DD
       const endParts = googleEndDate.split('-');
       const startTimeParts = googleStartTime ? googleStartTime.split(':') : ['9', '0'];
@@ -577,12 +612,13 @@ async function publishToGoogle({ accessToken, locationId, caption, mediaFiles, g
       );
       console.log(`[google] ${postType} post created:`, resp.data.name);
       return { postId: resp.data.name };
-    });
+    }
   }
 
   // STANDARD post — existing behavior
   if (hasCaption) {
-    return withRetry(async () => {
+    {
+      // No retry: see EVENT/OFFER branch above.
       const body = {
         languageCode: 'en',
         summary: caption,
@@ -611,28 +647,28 @@ async function publishToGoogle({ accessToken, locationId, caption, mediaFiles, g
       );
       console.log('[google] Local post created:', resp.data.name);
       return { postId: resp.data.name };
-    });
+    }
   }
 
   // If no caption but has photos → upload to business photos
   if (hasMedia) {
     const postIds = [];
     for (const file of mediaFiles) {
-      await withRetry(async () => {
-        const body = {
-          mediaFormat: 'PHOTO',
-          locationAssociation: { category: 'ADDITIONAL' },
-          sourceUrl: `${baseUrl}/uploads/${file}`,
-        };
-        console.log('[google] Uploading photo for', locationId, ':', file);
-        const resp = await axios.post(
-          `${GOOGLE_API}/${locationId}/media`,
-          body,
-          { headers }
-        );
-        console.log('[google] Photo uploaded:', resp.data.name);
-        postIds.push(resp.data.name);
-      });
+      // No retry: each POST creates a Google media entry. Retrying on a
+      // dropped response would attach the same photo twice.
+      const body = {
+        mediaFormat: 'PHOTO',
+        locationAssociation: { category: 'ADDITIONAL' },
+        sourceUrl: `${baseUrl}/uploads/${file}`,
+      };
+      console.log('[google] Uploading photo for', locationId, ':', file);
+      const resp = await axios.post(
+        `${GOOGLE_API}/${locationId}/media`,
+        body,
+        { headers }
+      );
+      console.log('[google] Photo uploaded:', resp.data.name);
+      postIds.push(resp.data.name);
     }
     return { postId: postIds.join(',') };
   }
