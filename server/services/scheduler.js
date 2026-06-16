@@ -8,7 +8,17 @@ const UPLOADS_DIR = process.env.NODE_ENV === 'production'
   ? '/data/uploads'
   : path.join(__dirname, '..', '..', 'uploads');
 
-const MAX_RETRIES = 3;
+// How many posts to publish concurrently per tick. Posts almost always belong
+// to different merchants (different FB pages/IG accounts), and Meta rate-limits
+// per page/token, so running a few in parallel is safe and ~Nx faster than the
+// old fully-sequential loop. Kept small so a mid-batch crash strands at most
+// this many posts in 'publishing' (the rest stay 'scheduled' and survive).
+const CONCURRENCY = 4;
+
+// Stop claiming new posts once a tick has run this long, leaving the remainder
+// for the next minute's tick. Prevents one giant batch (or a slow IG post) from
+// monopolising the process indefinitely.
+const TICK_BUDGET_MS = 55 * 1000;
 
 function getMerchantFromDb(mid) {
   const db = getDb();
@@ -158,53 +168,50 @@ function cleanupOrphanedUploads(db) {
 }
 
 const publishingPosts = new Set();
+// Guards against overlapping ticks: node-cron fires every minute, but a batch
+// (or a slow IG post) can run longer than that. A second concurrent run would
+// double the effective concurrency, so we skip it.
+let isProcessing = false;
 
-async function processScheduledPosts() {
-  const db = getDb();
-  const now = new Date().toISOString();
-
-  // Atomic claim: only the caller whose conditional UPDATE actually changes a
-  // row gets to publish that post. Protects against concurrent ticks and any
-  // future multi-process setup. Returns the rows that this caller now owns.
-  const claim = db.transaction((nowIso) => {
+// Atomically claim the next due post: flip exactly one 'scheduled' row whose
+// time has arrived to 'publishing'. The conditional UPDATE guarantees only one
+// worker (or process) can ever own a given post. Scans a small window of
+// candidates so a lost race (another worker grabbed the first) still claims the
+// next available one instead of giving up. Returns the claimed post row, or
+// null when nothing is due.
+function claimNextDuePost(db, nowIso) {
+  const claim = db.transaction(() => {
     const candidates = db.prepare(
-      "SELECT id FROM posts WHERE status = 'scheduled' AND scheduled_time <= ?"
+      "SELECT id FROM posts WHERE status = 'scheduled' AND scheduled_time <= ? ORDER BY scheduled_time LIMIT 20"
     ).all(nowIso);
-    const claimedIds = [];
     for (const c of candidates) {
       const r = db.prepare(
         "UPDATE posts SET status = 'publishing' WHERE id = ? AND status = 'scheduled'"
       ).run(c.id);
-      if (r.changes === 1) claimedIds.push(c.id);
+      if (r.changes === 1) {
+        return db.prepare('SELECT * FROM posts WHERE id = ?').get(c.id);
+      }
     }
-    return claimedIds;
+    return null;
   });
+  return claim();
+}
 
-  const claimedIds = claim(now);
-  if (claimedIds.length === 0) return;
+// Publish every pending platform of a single already-claimed post, then set the
+// post's overall status. On a platform error we mark it 'failed' immediately —
+// NO auto-retry: a post-creating API call that timed out may have actually
+// succeeded on the platform, so retrying would risk a duplicate. The user
+// retries manually. (See memory: feedback_no_retry_on_create.)
+async function publishOnePost(db, post) {
+  // Belt-and-suspenders: in-memory guard against publishing the same post twice
+  // within this Node process.
+  if (publishingPosts.has(post.id)) {
+    console.log(`[scheduler] Skipping ${post.id} — already publishing in-process`);
+    return;
+  }
+  publishingPosts.add(post.id);
 
-  const placeholders = claimedIds.map(() => '?').join(',');
-  const posts = db.prepare(
-    `SELECT * FROM posts WHERE id IN (${placeholders})`
-  ).all(...claimedIds);
-
-  for (let postIdx = 0; postIdx < posts.length; postIdx++) {
-    const post = posts[postIdx];
-    // Belt-and-suspenders: in-memory guard against a second async invocation
-    // of processScheduledPosts on the same Node process.
-    if (publishingPosts.has(post.id)) {
-      console.log(`[scheduler] Skipping ${post.id} — already publishing in-process`);
-      continue;
-    }
-
-    // Stagger publishes so multiple posts scheduled for the same minute
-    // don't hammer Instagram's media-processing queue all at once.
-    if (postIdx > 0) {
-      await new Promise(r => setTimeout(r, 8000));
-    }
-
-    publishingPosts.add(post.id);
-
+  try {
     const platforms = db.prepare(
       "SELECT * FROM post_platforms WHERE post_id = ? AND status = 'pending'"
     ).all(post.id);
@@ -267,27 +274,60 @@ async function processScheduledPosts() {
         anySuccess = true;
       } catch (err) {
         allSuccess = false;
-        let retryCount = 0;
-        try {
-          retryCount = pp.error ? (JSON.parse(pp.error).retries || 0) : 0;
-        } catch (_) {}
-        retryCount++;
-
-        if (retryCount < MAX_RETRIES) {
-          db.prepare(
-            "UPDATE post_platforms SET status = 'pending', error = ? WHERE id = ?"
-          ).run(JSON.stringify({ message: err.message, retries: retryCount }), pp.id);
-        } else {
-          db.prepare(
-            "UPDATE post_platforms SET status = 'failed', error = ? WHERE id = ?"
-          ).run(JSON.stringify({ message: err.message, retries: retryCount }), pp.id);
-        }
+        const errMsg = err.response?.data?.error?.message || err.response?.data?.error_description || err.message;
+        console.error(`[scheduler] ${pp.platform} error for post ${post.id}:`, errMsg);
+        db.prepare(
+          "UPDATE post_platforms SET status = 'failed', error = ? WHERE id = ?"
+        ).run(errMsg, pp.id);
       }
     }
 
     const finalStatus = allSuccess ? 'success' : anySuccess ? 'partial' : 'failed';
     db.prepare('UPDATE posts SET status = ? WHERE id = ?').run(finalStatus, post.id);
+    console.log(`[scheduler] Post ${post.id} finished: ${finalStatus}`);
+  } finally {
     publishingPosts.delete(post.id);
+  }
+}
+
+// A single worker: claim-and-publish due posts one at a time until none are
+// left or the tick's time budget is spent. Running CONCURRENCY of these in
+// parallel gives bounded concurrency without ever claiming more posts than are
+// actively being published — so a crash strands at most CONCURRENCY posts.
+async function publishWorker(db, deadline) {
+  while (Date.now() < deadline) {
+    const now = new Date().toISOString();
+    const post = claimNextDuePost(db, now);
+    if (!post) return; // nothing due right now
+    try {
+      await publishOnePost(db, post);
+    } catch (err) {
+      console.error(`[scheduler] Unexpected error publishing ${post.id}:`, err.message);
+      // Settle the post so it doesn't stay stuck in 'publishing'.
+      try {
+        db.prepare("UPDATE posts SET status = 'failed' WHERE id = ? AND status = 'publishing'")
+          .run(post.id);
+      } catch (_) {}
+    }
+  }
+}
+
+async function processScheduledPosts() {
+  if (isProcessing) {
+    console.log('[scheduler] Previous tick still running — skipping');
+    return;
+  }
+  isProcessing = true;
+  const db = getDb();
+  const deadline = Date.now() + TICK_BUDGET_MS;
+  try {
+    const workers = [];
+    for (let i = 0; i < CONCURRENCY; i++) {
+      workers.push(publishWorker(db, deadline));
+    }
+    await Promise.all(workers);
+  } finally {
+    isProcessing = false;
   }
 }
 

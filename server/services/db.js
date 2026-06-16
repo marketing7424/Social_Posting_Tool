@@ -15,6 +15,10 @@ function getDb() {
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
+    // Wait (instead of throwing "database is locked") when a write briefly
+    // collides with another — e.g. the scheduler's concurrent publishers vs. a
+    // /status or /retry request hitting the same rows.
+    db.pragma('busy_timeout = 5000');
 
     const schema = fs.readFileSync(
       path.join(__dirname, '..', 'database', 'schema.sql'),

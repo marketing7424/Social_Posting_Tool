@@ -92,6 +92,15 @@ function isNotConnectedError(err) {
     s.includes('not configured');
 }
 
+// Compact fingerprint of the list's visible state (post status + each
+// platform's status). Used so a silent poll only re-renders / disturbs the UI
+// when something actually changed.
+function postsSignature(list) {
+  return (list || [])
+    .map(p => `${p.id}:${p.status}:${(p.platforms || []).map(pl => `${pl.platform}=${pl.status}`).join('|')}`)
+    .join(';');
+}
+
 const PLATFORM_OPTIONS = [
   { label: 'Facebook', value: 'facebook' },
   { label: 'Instagram', value: 'instagram' },
@@ -195,9 +204,11 @@ export default function ManagePosts() {
       .catch(() => {});
   }, []);
 
-  // Fetch posts with current filters
-  const fetchPosts = useCallback(async () => {
-    setLoading(true);
+  // Fetch posts with current filters. Pass silent=true for background polling:
+  // no spinner, no error toast, and the list is only replaced when its visible
+  // state actually changed (so row selection isn't wiped on every poll).
+  const fetchPosts = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const cleanFilters = {};
       Object.entries(filters).forEach(([k, v]) => {
@@ -216,11 +227,11 @@ export default function ManagePosts() {
       });
       const data = await getPosts(cleanFilters);
       const list = Array.isArray(data) ? data : data?.posts || [];
-      setPosts(list);
+      setPosts(prev => (postsSignature(prev) === postsSignature(list) ? prev : list));
     } catch {
-      message.error('Failed to load posts');
+      if (!silent) message.error('Failed to load posts');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [filters]);
 
@@ -228,10 +239,23 @@ export default function ManagePosts() {
     fetchPosts();
   }, [fetchPosts]);
 
-  // Clear selection when data changes
+  // Clear selection only when the *set* of rows changes (delete, filter, page
+  // change) — not when a background poll merely flips a post's status — so the
+  // user's selection survives live status updates.
+  const postIdsKey = posts.map(p => p.id).join(',');
   useEffect(() => {
     setSelectedRowKeys([]);
-  }, [posts]);
+  }, [postIdsKey]);
+
+  // Live status: while any post is still moving (scheduled or publishing),
+  // silently refresh every 10s so "Scheduled → Publishing → Published" updates
+  // on their own without the user hitting refresh. Stops once nothing is active.
+  const hasActivePosts = posts.some(p => p.status === 'scheduled' || p.status === 'publishing');
+  useEffect(() => {
+    if (!hasActivePosts) return undefined;
+    const id = setInterval(() => fetchPosts(true), 10000);
+    return () => clearInterval(id);
+  }, [hasActivePosts, fetchPosts]);
 
   // Re-show failure banner when the set of failed/partial posts changes
   const failedPostsKey = posts
