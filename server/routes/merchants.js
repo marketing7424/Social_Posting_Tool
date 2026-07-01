@@ -35,6 +35,7 @@ function rowToMerchant(row) {
     googleLocationName: row.google_location_name || '',
     timezone: row.timezone || '',
     hashtags: row.hashtags || '',
+    industry: row.industry || '',
     fbTokenCreatedAt: row.fb_token_created_at || '',
     googleTokenCreatedAt: row.google_token_created_at || '',
     fbLastCheckAt: row.fb_last_check_at || '',
@@ -78,7 +79,7 @@ router.get('/:mid', (req, res) => {
 
 // POST /api/merchants
 router.post('/', (req, res) => {
-  const { mid, dbaName, address, phone, phone2, website, hashtags } = req.body;
+  const { mid, dbaName, address, phone, phone2, website, hashtags, industry } = req.body;
   if (!mid || !dbaName) {
     return res.status(400).json({ error: 'MID and DBA Name are required' });
   }
@@ -93,8 +94,8 @@ router.post('/', (req, res) => {
   const formattedPhone2 = formatPhone(phone2);
   const detectedTz = timezoneFromAddress(address) || '';
   db.prepare(
-    'INSERT INTO merchants (mid, dba_name, address, phone, phone2, website, timezone, hashtags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(mid, dbaName, address || '', formattedPhone, formattedPhone2, website || '', detectedTz, hashtags || '');
+    'INSERT INTO merchants (mid, dba_name, address, phone, phone2, website, timezone, hashtags, industry) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(mid, dbaName, address || '', formattedPhone, formattedPhone2, website || '', detectedTz, hashtags || '', industry || 'Nail Salon');
 
   const merchant = db.prepare('SELECT * FROM merchants WHERE mid = ?').get(mid);
   res.status(201).json(rowToMerchant(merchant));
@@ -112,7 +113,7 @@ router.patch('/:mid', (req, res) => {
 
   const fieldMap = {
     dbaName: 'dba_name', address: 'address', phone: 'phone', phone2: 'phone2', website: 'website',
-    timezone: 'timezone', hashtags: 'hashtags',
+    timezone: 'timezone', hashtags: 'hashtags', industry: 'industry',
     fbPageId: 'fb_page_id', fbToken: 'fb_token', fbPageName: 'fb_page_name',
     igUserId: 'ig_user_id', igToken: 'ig_token', igUsername: 'ig_username',
     googleToken: 'google_token', googleLocationId: 'google_location_id', googleLocationName: 'google_location_name',

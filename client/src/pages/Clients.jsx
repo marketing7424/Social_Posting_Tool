@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Table,
   Input,
@@ -11,6 +11,9 @@ import {
   Typography,
   Tooltip,
   Segmented,
+  Select,
+  Divider,
+  Tag,
 } from 'antd';
 import {
   PlusOutlined,
@@ -45,6 +48,21 @@ dayjs.extend(relativeTime);
 const { Title, Text } = Typography;
 
 const STALE_HOURS = 24;
+
+// Seed industries — the dropdown grows beyond these as merchants use new ones.
+const DEFAULT_INDUSTRIES = ['Nail Salon', 'Hair Salon'];
+
+// Distinct, sorted industry list = defaults ∪ whatever merchants already use.
+function deriveIndustries(merchants, extra = []) {
+  const set = new Set(DEFAULT_INDUSTRIES);
+  for (const m of merchants) {
+    if (m.industry) set.add(m.industry);
+  }
+  for (const e of extra) {
+    if (e) set.add(e);
+  }
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
+}
 
 const PLATFORM_ICONS = {
   facebook: { icon: <FacebookFilled />, color: '#1D4ED8', label: 'Facebook' },
@@ -138,7 +156,26 @@ export default function Clients() {
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [testing, setTesting] = useState(false);
   const [brokenFilter, setBrokenFilter] = useState('all');
+  const [industryFilter, setIndustryFilter] = useState('all');
+  // Industries added via the "+ Add" input this session, not yet loaded from any merchant.
+  const [addedIndustries, setAddedIndustries] = useState([]);
+  const [newIndustry, setNewIndustry] = useState('');
+  const industryInputRef = useRef(null);
   const [form] = Form.useForm();
+
+  const industryOptions = deriveIndustries(merchants, addedIndustries);
+
+  const addIndustry = (e) => {
+    e?.preventDefault?.();
+    const val = newIndustry.trim();
+    if (!val) return;
+    if (!industryOptions.includes(val)) {
+      setAddedIndustries((prev) => [...prev, val]);
+    }
+    form.setFieldsValue({ industry: val });
+    setNewIndustry('');
+    setTimeout(() => industryInputRef.current?.focus(), 0);
+  };
 
   const fetchMerchants = useCallback(async (search = '') => {
     setLoading(true);
@@ -170,6 +207,7 @@ export default function Clients() {
   const openAddModal = () => {
     setEditingMerchant(null);
     form.resetFields();
+    form.setFieldsValue({ industry: 'Nail Salon' });
     setModalOpen(true);
   };
 
@@ -183,6 +221,7 @@ export default function Clients() {
       phone2: merchant.phone2 || '',
       website: merchant.website,
       hashtags: merchant.hashtags || '',
+      industry: merchant.industry || '',
     });
     setModalOpen(true);
   };
@@ -268,6 +307,7 @@ export default function Clients() {
   ).length;
 
   const filteredMerchants = merchants.filter((m) => {
+    if (industryFilter !== 'all' && (m.industry || '') !== industryFilter) return false;
     switch (brokenFilter) {
       case 'any': return isFbBroken(m) || isIgBroken(m) || isGoogleBroken(m);
       case 'fb': return isFbBroken(m);
@@ -316,6 +356,13 @@ export default function Clients() {
       key: 'website',
       responsive: ['lg'],
       render: (text) => text ? <a href={text.startsWith('http') ? text : `https://${text}`} target="_blank" rel="noopener noreferrer">{text}</a> : '',
+    },
+    {
+      title: 'Industry',
+      dataIndex: 'industry',
+      key: 'industry',
+      render: (text) => text ? <Tag color="blue">{text}</Tag> : '',
+      sorter: (a, b) => (a.industry || '').localeCompare(b.industry || ''),
     },
     {
       title: 'Platforms Connected',
@@ -436,6 +483,23 @@ export default function Clients() {
         ]}
       />
 
+      <div style={{ marginBottom: 12 }}>
+        <Segmented
+          value={industryFilter}
+          onChange={setIndustryFilter}
+          options={[
+            { label: `All (${merchants.length})`, value: 'all' },
+            ...industryOptions
+              .map((ind) => ({
+                label: `${ind} (${merchants.filter((m) => (m.industry || '') === ind).length})`,
+                value: ind,
+              }))
+              // Only offer industries that at least one merchant actually has.
+              .filter((o) => merchants.some((m) => (m.industry || '') === o.value)),
+          ]}
+        />
+      </div>
+
       <Table
         columns={columns}
         dataSource={filteredMerchants}
@@ -473,6 +537,36 @@ export default function Clients() {
             rules={[{ required: true, message: 'DBA Name is required' }]}
           >
             <Input placeholder="Business name" />
+          </Form.Item>
+          <Form.Item
+            name="industry"
+            label="Industry"
+            rules={[{ required: true, message: 'Industry is required' }]}
+          >
+            <Select
+              showSearch
+              placeholder="Select an industry"
+              options={industryOptions.map((ind) => ({ label: ind, value: ind }))}
+              dropdownRender={(menu) => (
+                <>
+                  {menu}
+                  <Divider style={{ margin: '8px 0' }} />
+                  <Space style={{ padding: '0 8px 4px' }}>
+                    <Input
+                      placeholder="Add new industry"
+                      ref={industryInputRef}
+                      value={newIndustry}
+                      onChange={(e) => setNewIndustry(e.target.value)}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      onPressEnter={addIndustry}
+                    />
+                    <Button type="text" icon={<PlusOutlined />} onClick={addIndustry}>
+                      Add
+                    </Button>
+                  </Space>
+                </>
+              )}
+            />
           </Form.Item>
           <Form.Item name="address" label="Address">
             <Input placeholder="Street address" />

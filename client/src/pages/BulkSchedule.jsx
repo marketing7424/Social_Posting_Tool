@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   Button, Space, message, Typography, Input, Upload,
-  Tag, Tooltip, Divider, Modal, Checkbox,
+  Tag, Tooltip, Divider, Modal, Checkbox, Select,
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, SendOutlined, ClockCircleOutlined,
@@ -633,7 +633,26 @@ export default function BulkSchedule() {
   const [allMerchants, setAllMerchants] = useState([]);
   const [massSelected, setMassSelected] = useState(new Set());
   const [massSearch, setMassSearch] = useState('');
+  const [massIndustry, setMassIndustry] = useState(''); // '' = all industries
   const [massPersistExclude, setMassPersistExclude] = useState(false);
+
+  // Distinct industries present in the loaded merchant list (for the filter dropdown).
+  const massIndustries = Array.from(
+    new Set(allMerchants.map((m) => m.industry).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b));
+
+  // Stores currently visible in the modal, after applying both search and industry filters.
+  const massVisibleMerchants = allMerchants.filter((m) => {
+    if (massIndustry && (m.industry || '') !== massIndustry) return false;
+    if (!massSearch.trim()) return true;
+    const q = massSearch.toLowerCase();
+    return (m.dbaName || '').toLowerCase().includes(q)
+      || (m.dba_name || '').toLowerCase().includes(q)
+      || (m.mid || '').toLowerCase().includes(q)
+      || (m.name || '').toLowerCase().includes(q);
+  });
+  const massVisibleIds = massVisibleMerchants.map((m) => m.mid || m.id);
+  const massVisibleSelectedCount = massVisibleIds.filter((id) => massSelected.has(id)).length;
 
   // Load persisted excluded merchants from localStorage
   const EXCLUDE_KEY = 'massPublishExcluded';
@@ -652,6 +671,7 @@ export default function BulkSchedule() {
       setMassSelected(new Set(list.filter(m => !excluded.has(m.mid || m.id)).map(m => m.mid || m.id)));
       setMassPersistExclude(false);
       setMassSearch('');
+      setMassIndustry('');
       setMassModalOpen(true);
     } catch {
       message.error('Failed to load merchants');
@@ -1306,41 +1326,50 @@ export default function BulkSchedule() {
           </Text>
         </div>
 
-        <Input
-          prefix={<SearchOutlined style={{ color: '#94A3B8' }} />}
-          placeholder="Search stores..."
-          value={massSearch}
-          onChange={(e) => setMassSearch(e.target.value)}
-          allowClear
-          style={{ marginBottom: 12 }}
-        />
+        <Space.Compact style={{ width: '100%', marginBottom: 12 }}>
+          <Input
+            prefix={<SearchOutlined style={{ color: '#94A3B8' }} />}
+            placeholder="Search stores..."
+            value={massSearch}
+            onChange={(e) => setMassSearch(e.target.value)}
+            allowClear
+          />
+          <Select
+            value={massIndustry}
+            onChange={setMassIndustry}
+            style={{ minWidth: 170 }}
+            options={[
+              { label: 'All industries', value: '' },
+              ...massIndustries.map((ind) => ({ label: ind, value: ind })),
+            ]}
+          />
+        </Space.Compact>
 
         <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Checkbox
-            checked={massSelected.size === allMerchants.length}
-            indeterminate={massSelected.size > 0 && massSelected.size < allMerchants.length}
+            checked={massVisibleIds.length > 0 && massVisibleSelectedCount === massVisibleIds.length}
+            indeterminate={massVisibleSelectedCount > 0 && massVisibleSelectedCount < massVisibleIds.length}
             onChange={(e) => {
-              if (e.target.checked) {
-                setMassSelected(new Set(allMerchants.map(m => m.mid || m.id)));
-              } else {
-                setMassSelected(new Set());
-              }
+              setMassSelected(prev => {
+                const next = new Set(prev);
+                if (e.target.checked) {
+                  massVisibleIds.forEach(id => next.add(id));
+                } else {
+                  massVisibleIds.forEach(id => next.delete(id));
+                }
+                return next;
+              });
             }}
           >
-            <Text strong style={{ fontSize: 13 }}>Select All ({massSelected.size}/{allMerchants.length})</Text>
+            <Text strong style={{ fontSize: 13 }}>
+              Select All ({massVisibleSelectedCount}/{massVisibleIds.length})
+              {massIndustry ? ` — ${massIndustry}` : ''}
+            </Text>
           </Checkbox>
         </div>
 
         <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid #E2E8F0', borderRadius: 8, padding: '4px 0' }}>
-          {allMerchants
-            .filter(m => {
-              if (!massSearch.trim()) return true;
-              const q = massSearch.toLowerCase();
-              return (m.dbaName || '').toLowerCase().includes(q)
-                || (m.dba_name || '').toLowerCase().includes(q)
-                || (m.mid || '').toLowerCase().includes(q)
-                || (m.name || '').toLowerCase().includes(q);
-            })
+          {massVisibleMerchants
             .map(m => {
               const id = m.mid || m.id;
               return (

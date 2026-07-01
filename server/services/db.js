@@ -66,10 +66,22 @@ function getDb() {
       "ALTER TABLE merchants ADD COLUMN google_last_check_at TEXT DEFAULT ''",
       "ALTER TABLE merchants ADD COLUMN google_last_check_ok INTEGER DEFAULT 0",
       "ALTER TABLE merchants ADD COLUMN google_last_check_error TEXT DEFAULT ''",
+      // Business category for targeted mass-publishing
+      "ALTER TABLE merchants ADD COLUMN industry TEXT DEFAULT ''",
     ];
     for (const sql of migrations) {
       try { db.exec(sql); } catch (_) { /* column already exists */ }
     }
+
+    // One-time backfill for the industry column: classify existing merchants by
+    // their DBA name (names containing "hair" → Hair Salon, everything else →
+    // Nail Salon). Idempotent — only touches rows that don't have an industry yet.
+    try {
+      db.prepare(
+        "UPDATE merchants SET industry = CASE WHEN LOWER(dba_name) LIKE '%hair%' " +
+        "THEN 'Hair Salon' ELSE 'Nail Salon' END WHERE industry IS NULL OR industry = ''"
+      ).run();
+    } catch (_) {}
 
     // Ensure admin emails have admin role
     const adminEmails = [
