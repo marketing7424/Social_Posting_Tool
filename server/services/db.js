@@ -83,6 +83,18 @@ function getDb() {
       ).run();
     } catch (_) {}
 
+    // Seed the industries master list: the two defaults plus any industry value
+    // already present on merchants (so the list reflects existing data). Admins
+    // manage it afterwards via /api/industries. INSERT OR IGNORE keeps it idempotent.
+    try {
+      const insInd = db.prepare('INSERT OR IGNORE INTO industries (name) VALUES (?)');
+      for (const name of ['Nail Salon', 'Hair Salon']) insInd.run(name);
+      const used = db.prepare(
+        "SELECT DISTINCT industry FROM merchants WHERE industry IS NOT NULL AND industry != ''"
+      ).all();
+      for (const r of used) insInd.run(r.industry);
+    } catch (_) {}
+
     // Ensure admin emails have admin role
     const adminEmails = [
       'marketing@richpaymentsolutions.com',

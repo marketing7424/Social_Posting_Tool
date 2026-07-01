@@ -34,6 +34,7 @@ app.use(optionalAuth);
 // API Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/merchants', require('./routes/merchants'));
+app.use('/api/industries', require('./routes/industries'));
 app.use('/api/posts', require('./routes/posts'));
 app.use('/api/media', require('./routes/media'));
 app.use('/api/captions', require('./routes/captions'));

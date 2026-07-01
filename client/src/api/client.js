@@ -51,6 +51,11 @@ export const createMerchant = (data) => api.post('/merchants', data).then(r => r
 export const updateMerchant = (mid, data) => api.patch(`/merchants/${mid}`, data).then(r => r.data);
 export const deleteMerchant = (mid) => api.delete(`/merchants/${mid}`).then(r => r.data);
 
+// Industries (shared master list; add/delete are admin-only)
+export const getIndustries = () => api.get('/industries').then(r => r.data);
+export const createIndustry = (name) => api.post('/industries', { name }).then(r => r.data);
+export const deleteIndustry = (name) => api.delete(`/industries/${encodeURIComponent(name)}`).then(r => r.data);
+
 // Posts
 export const getPosts = (filters = {}) => {
   const params = new URLSearchParams(filters).toString();

@@ -54,6 +54,11 @@ CREATE TABLE IF NOT EXISTS merchants (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS industries (
+  name TEXT PRIMARY KEY,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS platform_media_order (
   post_id TEXT REFERENCES posts(id) ON DELETE CASCADE,
   platform TEXT NOT NULL,

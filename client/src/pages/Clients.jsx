@@ -39,6 +39,9 @@ import {
   updateMerchant,
   deleteMerchant,
   testAllConnections,
+  getIndustries,
+  createIndustry,
+  deleteIndustry,
 } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import PhoneInput from '../components/merchants/PhoneInput';
@@ -49,20 +52,8 @@ const { Title, Text } = Typography;
 
 const STALE_HOURS = 24;
 
-// Seed industries — the dropdown grows beyond these as merchants use new ones.
+// Fallback list used only if the industries API can't be reached.
 const DEFAULT_INDUSTRIES = ['Nail Salon', 'Hair Salon'];
-
-// Distinct, sorted industry list = defaults ∪ whatever merchants already use.
-function deriveIndustries(merchants, extra = []) {
-  const set = new Set(DEFAULT_INDUSTRIES);
-  for (const m of merchants) {
-    if (m.industry) set.add(m.industry);
-  }
-  for (const e of extra) {
-    if (e) set.add(e);
-  }
-  return Array.from(set).sort((a, b) => a.localeCompare(b));
-}
 
 const PLATFORM_ICONS = {
   facebook: { icon: <FacebookFilled />, color: '#1D4ED8', label: 'Facebook' },
@@ -157,24 +148,68 @@ export default function Clients() {
   const [testing, setTesting] = useState(false);
   const [brokenFilter, setBrokenFilter] = useState('all');
   const [industryFilter, setIndustryFilter] = useState('all');
-  // Industries added via the "+ Add" input this session, not yet loaded from any merchant.
-  const [addedIndustries, setAddedIndustries] = useState([]);
+  // Shared master list of industries, loaded from the server (add/delete = admin).
+  const [industries, setIndustries] = useState([]);
   const [newIndustry, setNewIndustry] = useState('');
+  const [industrySaving, setIndustrySaving] = useState(false);
   const industryInputRef = useRef(null);
   const [form] = Form.useForm();
 
-  const industryOptions = deriveIndustries(merchants, addedIndustries);
+  const isAdmin = user?.role === 'admin';
+  const industryOptions = industries.length ? industries : DEFAULT_INDUSTRIES;
 
-  const addIndustry = (e) => {
+  const fetchIndustries = useCallback(async () => {
+    try {
+      const data = await getIndustries();
+      setIndustries(Array.isArray(data) ? data : []);
+    } catch {
+      /* keep whatever we had; DEFAULT_INDUSTRIES covers the empty case */
+    }
+  }, []);
+
+  // Add a new industry to the shared list (admin only). Applies everywhere.
+  const addIndustry = async (e) => {
     e?.preventDefault?.();
     const val = newIndustry.trim();
-    if (!val) return;
-    if (!industryOptions.includes(val)) {
-      setAddedIndustries((prev) => [...prev, val]);
+    if (!val || industrySaving) return;
+    setIndustrySaving(true);
+    try {
+      const list = await createIndustry(val);
+      setIndustries(Array.isArray(list) ? list : []);
+      form.setFieldsValue({ industry: val });
+      setNewIndustry('');
+      setTimeout(() => industryInputRef.current?.focus(), 0);
+    } catch (err) {
+      message.error(err.response?.data?.error || 'Failed to add industry');
+    } finally {
+      setIndustrySaving(false);
     }
-    form.setFieldsValue({ industry: val });
-    setNewIndustry('');
-    setTimeout(() => industryInputRef.current?.focus(), 0);
+  };
+
+  // Delete an industry (admin only). Any client using it has its industry cleared.
+  const handleDeleteIndustry = (name) => {
+    const inUse = merchants.filter((m) => (m.industry || '') === name).length;
+    Modal.confirm({
+      title: `Delete industry "${name}"?`,
+      content: inUse
+        ? `${inUse} client(s) currently use it — their industry will be cleared (left blank).`
+        : 'No clients currently use it.',
+      okText: 'Delete',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          const res = await deleteIndustry(name);
+          setIndustries(Array.isArray(res?.industries) ? res.industries : []);
+          if (industryFilter === name) setIndustryFilter('all');
+          message.success(
+            `Deleted "${name}"` + (res?.cleared ? ` — cleared on ${res.cleared} client(s)` : '')
+          );
+          fetchMerchants(searchText);
+        } catch (err) {
+          message.error(err.response?.data?.error || 'Failed to delete industry');
+        }
+      },
+    });
   };
 
   const fetchMerchants = useCallback(async (search = '') => {
@@ -191,7 +226,8 @@ export default function Clients() {
 
   useEffect(() => {
     fetchMerchants();
-  }, [fetchMerchants]);
+    fetchIndustries();
+  }, [fetchMerchants, fetchIndustries]);
 
   const handleSearch = (value) => {
     setSearchText(value);
@@ -207,7 +243,9 @@ export default function Clients() {
   const openAddModal = () => {
     setEditingMerchant(null);
     form.resetFields();
-    form.setFieldsValue({ industry: 'Nail Salon' });
+    // Default to Nail Salon when available, otherwise the first industry in the list.
+    const def = industryOptions.includes('Nail Salon') ? 'Nail Salon' : industryOptions[0];
+    form.setFieldsValue({ industry: def });
     setModalOpen(true);
   };
 
@@ -547,23 +585,43 @@ export default function Clients() {
               showSearch
               placeholder="Select an industry"
               options={industryOptions.map((ind) => ({ label: ind, value: ind }))}
+              optionRender={(option) => (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>{option.label}</span>
+                  {isAdmin && (
+                    <DeleteOutlined
+                      style={{ color: '#ff4d4f' }}
+                      onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleDeleteIndustry(option.value);
+                      }}
+                    />
+                  )}
+                </div>
+              )}
               dropdownRender={(menu) => (
                 <>
                   {menu}
-                  <Divider style={{ margin: '8px 0' }} />
-                  <Space style={{ padding: '0 8px 4px' }}>
-                    <Input
-                      placeholder="Add new industry"
-                      ref={industryInputRef}
-                      value={newIndustry}
-                      onChange={(e) => setNewIndustry(e.target.value)}
-                      onKeyDown={(e) => e.stopPropagation()}
-                      onPressEnter={addIndustry}
-                    />
-                    <Button type="text" icon={<PlusOutlined />} onClick={addIndustry}>
-                      Add
-                    </Button>
-                  </Space>
+                  {isAdmin && (
+                    <>
+                      <Divider style={{ margin: '8px 0' }} />
+                      <Space style={{ padding: '0 8px 4px' }}>
+                        <Input
+                          placeholder="Add new industry"
+                          ref={industryInputRef}
+                          value={newIndustry}
+                          onChange={(e) => setNewIndustry(e.target.value)}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          onPressEnter={addIndustry}
+                        />
+                        <Button type="text" icon={<PlusOutlined />} loading={industrySaving} onClick={addIndustry}>
+                          Add
+                        </Button>
+                      </Space>
+                    </>
+                  )}
                 </>
               )}
             />
